@@ -30,19 +30,25 @@ The implementation uses a `src/` package layout:
 
 Python 3.10 or later is required. PDF OCR uses the Tesseract executable; install
 it in the runtime image/environment and ensure it is available on `PATH` (or
-set `TESSERACT_CMD`).
+set `TESSERACT_CMD`). The checked-in `.env.example` uses the assessment's
+`./data` layout; the local, ignored `.env` points to the supplied root-level
+corpus and database.
 
 ```powershell
-python -m pip install -e ".[dev]"
-veltrix-ingest --corpus-dir .\corpus --manifest-path .\manifest.json
-python -m pytest
+uv sync
+uv run pytest
+uv run veltrix-ingest --corpus-dir .\corpus --manifest-path .\manifest.json
+uv run veltrix-api
 ```
 
-By default, the command uses `CORPUS_DIR=./data/corpus` and
-`MANIFEST_PATH=./data/manifest.json`, matching the assessment's runtime data
-layout. The command reports document and chunk counts; it does not print
-document contents.
+`uv sync` creates and maintains the project `.venv`. The API starts ingestion
+in the background; `GET /health` returns 503 while loading and 200 once ready.
+`POST /search` accepts `{"query": "annual leave", "limit": 5}` and requires an
+`X-Employee-Id` header found in the configured SQLite database. It applies
+role, region, and reference-date document filters before retrieval. This
+endpoint is for testing retrieval, not a replacement for the assessment's
+required `POST /chat`.
 
-The search API requires callers to pass a document-eligibility predicate. The
-later service layer must derive that predicate from the employee record and
-the assessment's region, date, and access rules."
+The ingestion command reports document and chunk counts without printing
+document contents. Never put real API keys in `.env.example` or commit a local
+`.env` file."

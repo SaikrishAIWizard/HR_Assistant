@@ -1,6 +1,12 @@
 .env
 .env.*
 !.env.example
+.vscode/
+.idea/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
 .pytest_cache/
 .venv/
 __pycache__/
