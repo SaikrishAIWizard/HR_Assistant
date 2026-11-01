@@ -1,0 +1,2 @@
+"""Veltrix PeopleOps assistant components."""
+

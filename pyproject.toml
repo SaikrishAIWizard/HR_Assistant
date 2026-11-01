@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "veltrix-peopleops-assistant"
+version = "0.1.0"
+description = "Document ingestion and retrieval for the Veltrix PeopleOps assessment"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "beautifulsoup4>=4.12,<5",
+    "pdfplumber>=0.11,<1",
+    "pydantic>=2.8,<3",
+    "PyMuPDF>=1.24,<2",
+    "python-docx>=1.1,<2",
+    "tiktoken>=0.7,<1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9"]
+
+[project.scripts]
+veltrix-ingest = "veltrix_assistant.ingestion.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
