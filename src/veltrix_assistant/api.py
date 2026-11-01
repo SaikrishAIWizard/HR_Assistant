@@ -26,6 +26,7 @@ from veltrix_assistant.policy.applicability import (
     parse_role,
 )
 from veltrix_assistant.retrieval.bm25 import BM25Retriever
+from veltrix_assistant.tools.leave import LeaveToolFactory
 
 
 _LOGGER = logging.getLogger("veltrix_assistant.api")
@@ -129,6 +130,11 @@ def create_app(
                 configured_manifest,
             )
             application.state.retriever = BM25Retriever(corpus.chunks)
+            application.state.leave_tool_factory = LeaveToolFactory(
+                configured_database,
+                corpus.chunks,
+                today=today,
+            )
             application.state.readiness = "ready"
             _LOGGER.info(
                 "ingestion_ready documents=%d chunks=%d",

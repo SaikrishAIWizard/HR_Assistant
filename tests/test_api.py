@@ -119,6 +119,7 @@ def test_health_and_search_apply_database_access_filters(tmp_path) -> None:
 
     with TestClient(app) as client:
         _wait_until_ready(client)
+        assert hasattr(app.state, "leave_tool_factory")
         response = client.post(
             "/search",
             headers={"X-Employee-Id": "E1001"},
