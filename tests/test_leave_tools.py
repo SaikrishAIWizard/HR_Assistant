@@ -5,7 +5,7 @@ from inspect import signature
 
 import pytest
 
-from veltrix_assistant.ingestion.schemas import DocumentChunk, DocumentMetadata
+from veltrix_assistant.schemas.documents import DocumentChunk, DocumentMetadata
 from veltrix_assistant.tools.leave import (
     LeaveToolFactory,
     LeaveTools,

@@ -7,7 +7,11 @@ import re
 from collections import Counter
 from collections.abc import Callable, Sequence
 
-from veltrix_assistant.ingestion.schemas import DocumentChunk, DocumentMetadata, RetrievedChunk
+from veltrix_assistant.schemas.documents import (
+    DocumentChunk,
+    DocumentMetadata,
+    RetrievedChunk,
+)
 
 
 _TOKEN_PATTERN = re.compile(r"[\w'-]+", re.UNICODE)

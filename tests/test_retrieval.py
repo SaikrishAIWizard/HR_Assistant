@@ -3,7 +3,7 @@ import logging
 import pytest
 import tiktoken
 
-from veltrix_assistant.ingestion.schemas import DocumentChunk, DocumentMetadata
+from veltrix_assistant.schemas.documents import DocumentChunk, DocumentMetadata
 from veltrix_assistant.retrieval.bm25 import BM25Retriever
 from veltrix_assistant.retrieval.context import (
     MAX_CORPUS_TOKENS,
@@ -77,7 +77,7 @@ def test_context_never_exceeds_hard_token_ceiling() -> None:
 
 def test_chunk_token_splitting_preserves_unicode_text(tmp_path) -> None:
     from veltrix_assistant.ingestion.chunking import chunk_sections
-    from veltrix_assistant.ingestion.schemas import ExtractedSection
+    from veltrix_assistant.schemas.documents import ExtractedSection
 
     metadata = _chunk("unicode", "placeholder").document
     original = ("Café policy 🙂 — annual leave. " * 120).strip()

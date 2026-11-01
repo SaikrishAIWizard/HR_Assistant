@@ -2,11 +2,11 @@
 
 from veltrix_assistant.tools.leave import (
     LeaveToolFactory,
-    LeaveToolResult,
     LeaveTools,
-    get_public_holidays,
     count_working_days,
+    get_public_holidays,
 )
+from veltrix_assistant.schemas.tools import LeaveToolResult
 
 __all__ = [
     "LeaveToolFactory",

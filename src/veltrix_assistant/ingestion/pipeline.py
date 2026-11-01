@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from veltrix_assistant.ingestion.chunking import chunk_sections
 from veltrix_assistant.ingestion.loaders import IngestionError, load_document
-from veltrix_assistant.ingestion.schemas import DocumentMetadata, IngestedCorpus
+from veltrix_assistant.schemas.documents import DocumentMetadata, IngestedCorpus
 
 
 class ManifestError(ValueError):

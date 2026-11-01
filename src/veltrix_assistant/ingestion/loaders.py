@@ -19,7 +19,7 @@ from docx.document import Document as DocxDocument
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
-from veltrix_assistant.ingestion.schemas import ExtractedSection
+from veltrix_assistant.schemas.documents import ExtractedSection
 
 
 class IngestionError(RuntimeError):

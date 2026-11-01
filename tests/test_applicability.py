@@ -1,13 +1,15 @@
 from datetime import date
 
-from veltrix_assistant.ingestion.schemas import (
+from veltrix_assistant.schemas.documents import (
     AccessLevel,
     DocumentMetadata,
     DocumentType,
 )
-from veltrix_assistant.policy.applicability import (
+from veltrix_assistant.schemas.policy import (
     DocumentAudience,
     PolicyEvidence,
+)
+from veltrix_assistant.policy.applicability import (
     document_precedence_key,
     get_applicable_documents,
     get_upcoming_winners,

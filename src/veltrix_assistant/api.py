@@ -14,50 +14,21 @@ from typing import Annotated
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request, Response
-from pydantic import BaseModel, ConfigDict, Field
 
 from veltrix_assistant.ingestion.pipeline import ingest_corpus
 from veltrix_assistant.policy.applicability import (
-    DocumentAudience,
-    Role,
     get_upcoming_winners,
     is_document_applicable,
     is_document_readable,
     parse_role,
 )
 from veltrix_assistant.retrieval.bm25 import BM25Retriever
+from veltrix_assistant.schemas.api import SearchRequest, SearchResponse, SearchResult
+from veltrix_assistant.schemas.policy import DocumentAudience, Role
 from veltrix_assistant.tools.leave import LeaveToolFactory
 
 
 _LOGGER = logging.getLogger("veltrix_assistant.api")
-
-
-class SearchRequest(BaseModel):
-    """Request body for the local retrieval test endpoint."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    query: str = Field(min_length=1, max_length=2000)
-    limit: int = Field(default=5, ge=1, le=20)
-    reference_date: date | None = None
-
-
-class SearchResult(BaseModel):
-    """A retrieved passage with source information for inspecting RAG results."""
-
-    doc_id: str
-    title: str
-    locator: str
-    text: str
-    score: float
-
-
-class SearchResponse(BaseModel):
-    """Retrieval results for one request."""
-
-    results: list[SearchResult]
-    upcoming: list[SearchResult] = Field(default_factory=list)
-    reference_date: date
 
 
 def _read_reference_date() -> date:

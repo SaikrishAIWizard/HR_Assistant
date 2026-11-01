@@ -6,7 +6,11 @@ import hashlib
 
 import tiktoken
 
-from veltrix_assistant.ingestion.schemas import DocumentChunk, DocumentMetadata, ExtractedSection
+from veltrix_assistant.schemas.documents import (
+    DocumentChunk,
+    DocumentMetadata,
+    ExtractedSection,
+)
 
 
 ENCODING_NAME = "cl100k_base"

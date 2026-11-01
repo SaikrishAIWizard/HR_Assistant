@@ -22,8 +22,11 @@ final conversation workflow remain subsequent requirements.
 
 The implementation uses a `src/` package layout:
 
-- `src/veltrix_assistant/ingestion/` — schema validation, file loaders,
-  chunking, and manifest-driven orchestration.
+- `src/veltrix_assistant/ingestion/` — file loaders, chunking, and
+  manifest-driven orchestration.
+- `src/veltrix_assistant/schemas/` — all Pydantic models, grouped by document,
+  policy, retrieval, API, and tool contracts. Business-rule decisions remain
+  with their owning domain modules.
 - `src/veltrix_assistant/policy/` — role/region/date eligibility, source
   precedence, tied-value conflict retention, and upcoming-change checks.
 - `src/veltrix_assistant/tools/` — DB-backed leave tools, permission checks,

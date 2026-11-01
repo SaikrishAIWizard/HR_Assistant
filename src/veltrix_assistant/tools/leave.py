@@ -10,18 +10,18 @@ from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
-
-from veltrix_assistant.ingestion.schemas import DocumentChunk
+from veltrix_assistant.schemas.documents import DocumentChunk
 from veltrix_assistant.policy.applicability import (
-    DocumentAudience,
-    Role,
     is_document_applicable,
     parse_role,
     select_precedence_winners,
 )
+from veltrix_assistant.schemas.policy import (
+    DocumentAudience,
+    Role,
+)
+from veltrix_assistant.schemas.tools import LeaveToolResult
 
 
 _LOGGER = logging.getLogger("veltrix_assistant.tools.leave")
@@ -32,17 +32,6 @@ _PUBLIC_HOLIDAY_LOCATOR = re.compile(
     r"\b(?:public|paid)\b.*\bholidays?\b|\bpublic and company holidays\b",
     re.IGNORECASE,
 )
-ToolStatus = Literal["success", "error"]
-class LeaveToolResult(BaseModel):
-    """Tool output includes a machine-readable status and specific failure."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    name: str
-    args: dict[str, object]
-    status: ToolStatus
-    data: dict[str, object] | None = None
-    error: str | None = None
 
 
 class HolidayCalendarError(ValueError):

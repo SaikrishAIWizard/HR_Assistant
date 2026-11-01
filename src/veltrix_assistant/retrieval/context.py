@@ -6,39 +6,16 @@ import logging
 from collections.abc import Sequence
 
 import tiktoken
-from pydantic import BaseModel, ConfigDict, Field
 
-from veltrix_assistant.ingestion.schemas import Citation, DocumentChunk
+from veltrix_assistant.schemas.documents import Citation, DocumentChunk
+from veltrix_assistant.schemas.retrieval import (
+    MAX_CORPUS_TOKENS,
+    CorpusContext,
+)
 
 
-MAX_CORPUS_TOKENS = 3000
 _ENCODING_NAME = "cl100k_base"
 _LOGGER = logging.getLogger("veltrix_assistant.llm")
-
-
-class CorpusContext(BaseModel):
-    """Corpus text and source metadata selected for one model call."""
-
-    model_config = ConfigDict(frozen=True)
-
-    blocks: tuple[tuple[Citation, str], ...]
-    corpus_tokens: int = Field(ge=0, le=MAX_CORPUS_TOKENS)
-
-    @property
-    def text(self) -> str:
-        return "\n\n".join(text for _, text in self.blocks)
-
-    @property
-    def citations(self) -> tuple[Citation, ...]:
-        unique_citations = dict.fromkeys(citation for citation, _ in self.blocks)
-        return tuple(unique_citations)
-
-    def formatted_text(self) -> str:
-        """Render source labels alongside the corpus text for a model prompt."""
-        return "\n\n".join(
-            f"[{citation.doc_id} | {citation.locator}]\n{text}"
-            for citation, text in self.blocks
-        )
 
 
 def build_corpus_context(
