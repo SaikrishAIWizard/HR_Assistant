@@ -2,8 +2,8 @@
 
 This repository implements the Veltrix HR-assistant assessment in small, testable
 steps. The current implementation covers **Requirement 1: ingestion and
-retrieval**; the HTTP API, document-precedence policy, leave tools, and
-conversation workflow remain subsequent requirements.
+retrieval** and **Requirement 2: document applicability and precedence**.
+Leave tools and the final conversation workflow remain subsequent requirements.
 
 ## Requirement 1 plan and implementation
 
@@ -23,6 +23,8 @@ The implementation uses a `src/` package layout:
 
 - `src/veltrix_assistant/ingestion/` — schema validation, file loaders,
   chunking, and manifest-driven orchestration.
+- `src/veltrix_assistant/policy/` — role/region/date eligibility, source
+  precedence, tied-value conflict retention, and upcoming-change checks.
 - `src/veltrix_assistant/retrieval/` — filtered BM25 search and context budget.
 - `tests/` — focused ingestion, retrieval, and token-budget tests.
 
@@ -47,7 +49,10 @@ in the background; `GET /health` returns 503 while loading and 200 once ready.
 `X-Employee-Id` header found in the configured SQLite database. It applies
 role, region, and reference-date document filters before retrieval. This
 endpoint is for testing retrieval, not a replacement for the assessment's
-required `POST /chat`.
+required `POST /chat`. Its response separates currently applicable `results`
+from `upcoming` changes that would win precedence on their effective date. The
+decision rules and current extraction boundary are documented in
+[`TASK2_TECHNICAL_IMPLEMENTATION.md`](./TASK2_TECHNICAL_IMPLEMENTATION.md).
 
 The ingestion command reports document and chunk counts without printing
 document contents. Never put real API keys in `.env.example` or commit a local

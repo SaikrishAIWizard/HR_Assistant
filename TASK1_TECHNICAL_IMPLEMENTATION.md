@@ -29,11 +29,13 @@ flowchart LR
     B --> T[At most 3,000 corpus-text tokens]
 ```
 
-In the current implementation, `POST /search` exercises ingestion, retrieval,
-and basic document eligibility through a FastAPI endpoint. It is not the final
-assessment `POST /chat` endpoint, and it does not call an LLM. The context
-builder, citation data, and token-count logger are provided for the later chat
-and LLM integration.
+`POST /search` exercises ingestion and retrieval through a FastAPI endpoint.
+It applies Task 2 role, region, and reference-date eligibility before ranking,
+and separates winning upcoming sources from currently applicable results. It
+is not the final assessment `POST /chat` endpoint, and it does not call an LLM.
+The context builder, citation data, and token-count logger are provided for the
+later chat and LLM integration. Task 2's precedence and conflict behavior is
+described in [`TASK2_TECHNICAL_IMPLEMENTATION.md`](./TASK2_TECHNICAL_IMPLEMENTATION.md).
 
 ## Module-by-module
 

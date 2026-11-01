@@ -27,7 +27,7 @@ def _write_fixture_files(tmp_path):
         encoding="utf-8",
     )
     (corpus_dir / "germany.md").write_text(
-        "# Annual Leave\nGermany annual leave regional policy.\n",
+        "# Annual Leave\nGermany annual leave regional policy and future change.\n",
         encoding="utf-8",
     )
     manifest_path = tmp_path / "manifest.json"
@@ -231,4 +231,35 @@ def test_search_excludes_documents_not_yet_effective(tmp_path) -> None:
 
     assert "FUTURE" not in {
         item["doc_id"] for item in response.json()["results"]
+    }
+    assert "FUTURE" in {
+        item["doc_id"] for item in response.json()["upcoming"]
+    }
+    assert response.json()["reference_date"] == "2026-12-31"
+
+
+def test_search_does_not_report_upcoming_global_change_over_regional_policy(
+    tmp_path,
+) -> None:
+    corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
+    app = create_app(
+        corpus_dir=corpus_dir,
+        manifest_path=manifest_path,
+        database_path=database_path,
+    )
+
+    with TestClient(app) as client:
+        _wait_until_ready(client)
+        response = client.post(
+            "/search",
+            headers={"X-Employee-Id": "D1001"},
+            json={
+                "query": "Germany annual leave regional future change",
+                "reference_date": "2026-12-31",
+            },
+        )
+
+    assert response.status_code == 200
+    assert "FUTURE" not in {
+        item["doc_id"] for item in response.json()["upcoming"]
     }

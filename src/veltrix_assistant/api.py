@@ -9,7 +9,7 @@ import sqlite3
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated
 
 import uvicorn
 from dotenv import load_dotenv
@@ -17,16 +17,18 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from veltrix_assistant.ingestion.pipeline import ingest_corpus
-from veltrix_assistant.ingestion.schemas import DocumentMetadata
+from veltrix_assistant.policy.applicability import (
+    DocumentAudience,
+    Role,
+    get_upcoming_winners,
+    is_document_applicable,
+    is_document_readable,
+    parse_role,
+)
 from veltrix_assistant.retrieval.bm25 import BM25Retriever
 
 
 _LOGGER = logging.getLogger("veltrix_assistant.api")
-_ROLE_ACCESS = {
-    "employee": frozenset({"all"}),
-    "manager": frozenset({"all", "managers"}),
-    "hr": frozenset({"all", "managers", "hr"}),
-}
 
 
 class SearchRequest(BaseModel):
@@ -53,6 +55,8 @@ class SearchResponse(BaseModel):
     """Retrieval results for one request."""
 
     results: list[SearchResult]
+    upcoming: list[SearchResult] = Field(default_factory=list)
+    reference_date: date
 
 
 def _read_reference_date() -> date:
@@ -65,7 +69,7 @@ def _read_reference_date() -> date:
         raise ValueError("APP_TODAY must use YYYY-MM-DD format") from exc
 
 
-def _read_employee(database_path: Path, employee_id: str) -> tuple[str, str] | None:
+def _read_employee(database_path: Path, employee_id: str) -> tuple[str, Role] | None:
     try:
         with sqlite3.connect(database_path, timeout=5) as connection:
             row = connection.execute(
@@ -82,27 +86,14 @@ def _read_employee(database_path: Path, employee_id: str) -> tuple[str, str] | N
     if row is None:
         return None
     region, role = row
-    if role not in _ROLE_ACCESS or not isinstance(region, str):
+    valid_role = parse_role(role)
+    if valid_role is None or not isinstance(region, str):
         _LOGGER.error("Employee record has invalid access-control attributes")
         raise HTTPException(
             status_code=503,
             detail="Employee directory contains an invalid access record",
         )
-    return region, role
-
-
-def _document_is_allowed(
-    metadata: DocumentMetadata,
-    *,
-    region: str,
-    role: str,
-    reference_date: date,
-) -> bool:
-    return (
-        metadata.access_level in _ROLE_ACCESS[role]
-        and ("GLOBAL" in metadata.regions or region in metadata.regions)
-        and metadata.effective_date <= reference_date
-    )
+    return region, valid_role
 
 
 def create_app(
@@ -178,16 +169,45 @@ def create_app(
         region, role = identity
         retriever: BM25Retriever = request.app.state.retriever
         reference_date = search_request.reference_date or today
-        matches = retriever.search(
+        audience = DocumentAudience(region=region, role=role)
+        candidate_limit = max(search_request.limit * 10, 50)
+        applicable_candidates = retriever.search(
             search_request.query,
-            is_allowed=lambda metadata: _document_is_allowed(
+            is_allowed=lambda metadata: is_document_applicable(
                 metadata,
-                region=region,
-                role=role,
-                reference_date=reference_date,
+                audience,
+                reference_date,
             ),
-            limit=search_request.limit,
+            limit=candidate_limit,
         )
+        upcoming_candidates = retriever.search(
+            search_request.query,
+            is_allowed=lambda metadata: (
+                is_document_readable(metadata, audience)
+                and metadata.effective_date > reference_date
+            ),
+            limit=candidate_limit,
+        )
+        relevant_metadata = tuple(
+            dict.fromkeys(
+                match.chunk.document
+                for match in (*applicable_candidates, *upcoming_candidates)
+            )
+        )
+        upcoming_ids = {
+            document.doc_id
+            for document in get_upcoming_winners(
+                relevant_metadata,
+                audience,
+                reference_date,
+            )
+        }
+        applicable_matches = applicable_candidates[: search_request.limit]
+        upcoming_matches = [
+            match
+            for match in upcoming_candidates
+            if match.chunk.document.doc_id in upcoming_ids
+        ][: search_request.limit]
         return SearchResponse(
             results=[
                 SearchResult(
@@ -197,8 +217,19 @@ def create_app(
                     text=match.chunk.text,
                     score=match.score,
                 )
-                for match in matches
-            ]
+                for match in applicable_matches
+            ],
+            upcoming=[
+                SearchResult(
+                    doc_id=match.chunk.document.doc_id,
+                    title=match.chunk.document.title,
+                    locator=match.chunk.locator,
+                    text=match.chunk.text,
+                    score=match.score,
+                )
+                for match in upcoming_matches
+            ],
+            reference_date=reference_date,
         )
 
     return application
