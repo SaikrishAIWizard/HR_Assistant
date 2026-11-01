@@ -10,8 +10,8 @@ import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
-import fitz
 import pdfplumber
+import pymupdf
 from bs4 import BeautifulSoup, Tag
 from docx import Document
 from docx.document import Document as DocxDocument
@@ -95,9 +95,9 @@ def _ocr_pdf_page(path: Path, page_number: int) -> str:
 
     image_path: str | None = None
     try:
-        with fitz.open(path) as document:
+        with pymupdf.open(path) as document:
             page = document.load_page(page_number - 1)
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            pixmap = page.get_pixmap(matrix=pymupdf.Matrix(2, 2), alpha=False)
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as image_file:
                 image_path = image_file.name
             pixmap.save(image_path)

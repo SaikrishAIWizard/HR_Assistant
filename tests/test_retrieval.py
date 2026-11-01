@@ -57,6 +57,14 @@ def test_retrieval_is_deterministic_for_equal_scores() -> None:
     assert [result.chunk.chunk_id for result in results] == ["first", "second"]
 
 
+def test_context_keeps_source_labels_when_chunk_text_has_blank_lines() -> None:
+    context = build_corpus_context([_chunk("source", "First paragraph.\n\nSecond paragraph.")])
+
+    assert context.formatted_text().count("[source | p. 1]") == 1
+    assert context.text == "First paragraph.\n\nSecond paragraph."
+    assert context.citations[0].doc_id == "source"
+
+
 def test_context_never_exceeds_hard_token_ceiling() -> None:
     chunks = [_chunk("first", "annual leave " * 1200), _chunk("second", "holiday dates")]
     context = build_corpus_context(chunks)
@@ -65,6 +73,24 @@ def test_context_never_exceeds_hard_token_ceiling() -> None:
     assert context.corpus_tokens <= MAX_CORPUS_TOKENS
     assert context.corpus_tokens == len(encoding.encode(context.text))
     assert "[first | p. 1]" in context.formatted_text()
+
+
+def test_chunk_token_splitting_preserves_unicode_text(tmp_path) -> None:
+    from veltrix_assistant.ingestion.chunking import chunk_sections
+    from veltrix_assistant.ingestion.schemas import ExtractedSection
+
+    metadata = _chunk("unicode", "placeholder").document
+    original = ("Café policy 🙂 — annual leave. " * 120).strip()
+    chunks = chunk_sections(
+        metadata,
+        (ExtractedSection(page_number=1, locator="p. 1", text=original),),
+        max_tokens=50,
+    )
+    encoding = tiktoken.get_encoding("cl100k_base")
+
+    assert all(len(encoding.encode(chunk.text)) <= 50 for chunk in chunks)
+    assert "Café" in " ".join(chunk.text for chunk in chunks)
+    assert "🙂" in " ".join(chunk.text for chunk in chunks)
 
 
 def test_context_rejects_budget_above_assessment_limit() -> None:

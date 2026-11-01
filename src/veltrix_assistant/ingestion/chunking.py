@@ -49,15 +49,34 @@ def chunk_sections(
 
 
 def _split_text(text: str, encoding: tiktoken.Encoding, max_tokens: int) -> tuple[str, ...]:
-    token_ids = encoding.encode(text)
-    if len(token_ids) <= max_tokens:
-        return (text.strip(),) if text.strip() else ()
-
+    remaining = text.strip()
     chunks: list[str] = []
-    for offset in range(0, len(token_ids), max_tokens):
-        part = encoding.decode(token_ids[offset : offset + max_tokens]).strip()
+    while remaining:
+        if len(encoding.encode(remaining)) <= max_tokens:
+            chunks.append(remaining)
+            break
+
+        lower = 1
+        upper = len(remaining)
+        while lower < upper:
+            midpoint = (lower + upper + 1) // 2
+            if len(encoding.encode(remaining[:midpoint])) <= max_tokens:
+                lower = midpoint
+            else:
+                upper = midpoint - 1
+
+        boundary = max(
+            remaining.rfind(" ", 0, lower),
+            remaining.rfind("\n", 0, lower),
+            remaining.rfind("\t", 0, lower),
+        )
+        cut = boundary if boundary > 0 else lower
+        part = remaining[:cut].strip()
         while part and len(encoding.encode(part)) > max_tokens:
-            part = encoding.decode(encoding.encode(part)[:-1]).strip()
-        if part:
-            chunks.append(part)
+            cut -= 1
+            part = remaining[:cut].strip()
+        if cut < 1 or not part:
+            raise ValueError("Unable to split source text within the chunk token budget")
+        chunks.append(part)
+        remaining = remaining[cut:].strip()
     return tuple(chunks)

@@ -1,6 +1,6 @@
 import json
 
-import fitz
+import pymupdf
 from docx import Document
 
 from veltrix_assistant.ingestion.loaders import IngestionError
@@ -20,7 +20,7 @@ def _manifest_entry(doc_id: str, filename: str, doc_type: str = "policy") -> dic
 
 
 def _write_pdf(path) -> None:
-    document = fitz.open()
+    document = pymupdf.open()
     page = document.new_page()
     page.insert_text((72, 72), "Policy heading\nAnnual leave details.")
     document.save(path)
@@ -102,14 +102,18 @@ def test_rejects_manifest_paths_outside_corpus(tmp_path) -> None:
 def test_fails_when_a_supported_file_is_not_in_manifest(tmp_path) -> None:
     corpus_dir = tmp_path / "corpus"
     corpus_dir.mkdir()
+    (corpus_dir / "listed.md").write_text("# Listed\nText", encoding="utf-8")
     (corpus_dir / "unlisted.md").write_text("# Not listed\nText", encoding="utf-8")
     manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text("[]", encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps([_manifest_entry("LISTED", "listed.md")]),
+        encoding="utf-8",
+    )
 
     try:
         ingest_corpus(corpus_dir, manifest_path)
     except ManifestError as exc:
-        assert "at least one document" in str(exc)
+        assert "missing from the manifest" in str(exc)
     else:
         raise AssertionError("an empty manifest should be rejected")
 
@@ -136,7 +140,7 @@ def test_pdf_without_text_requires_ocr(tmp_path, monkeypatch) -> None:
     corpus_dir = tmp_path / "corpus"
     corpus_dir.mkdir()
     path = corpus_dir / "scan.pdf"
-    document = fitz.open()
+    document = pymupdf.open()
     document.new_page()
     document.save(path)
     document.close()

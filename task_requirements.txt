@@ -124,3 +124,8 @@ You do not need to use every framework. A small, well-tested system is preferabl
 The repository must include `Dockerfile`, `docker-compose.yml`, `.env.example`, tests runnable with `make test`, `README.md`, and a `DESIGN.md` of at most two pages. Compose must mount `./data`, start the service on port 8000, and make `/health` return 200 within 10 minutes after ingestion. Requests must finish within 30 seconds; use the specified HTTP errors for invalid bodies, missing/unknown employee IDs, and session-owner mismatch.
 
 The review stops if any must-pass check fails: Compose/health readiness, restricted-document leakage, unauthorized leave-data access, exceeding the 3,000-token corpus limit, or failure to reflect modified corpus values.
+
+----------------------------------------------------------------------------------------
+
+Task1 summary and implementation plan
+

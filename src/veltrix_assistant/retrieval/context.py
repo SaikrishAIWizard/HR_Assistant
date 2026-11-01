@@ -21,21 +21,23 @@ class CorpusContext(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    text: str
+    blocks: tuple[tuple[Citation, str], ...]
     corpus_tokens: int = Field(ge=0, le=MAX_CORPUS_TOKENS)
-    citations: tuple[Citation, ...]
+
+    @property
+    def text(self) -> str:
+        return "\n\n".join(text for _, text in self.blocks)
+
+    @property
+    def citations(self) -> tuple[Citation, ...]:
+        unique_citations = dict.fromkeys(citation for citation, _ in self.blocks)
+        return tuple(unique_citations)
 
     def formatted_text(self) -> str:
         """Render source labels alongside the corpus text for a model prompt."""
-        blocks = self.text.split("\n\n")
-        labels = [
-            f"[{citation.doc_id} | {citation.locator}]"
-            for citation in self.citations
-        ]
-        if len(blocks) != len(labels):
-            return self.text
         return "\n\n".join(
-            f"{label}\n{block}" for label, block in zip(labels, blocks, strict=True)
+            f"[{citation.doc_id} | {citation.locator}]\n{text}"
+            for citation, text in self.blocks
         )
 
 
@@ -49,22 +51,29 @@ def build_corpus_context(
         raise ValueError(f"max_tokens must be between 0 and {MAX_CORPUS_TOKENS}")
 
     encoding = tiktoken.get_encoding(_ENCODING_NAME)
-    selected_text: list[str] = []
-    citations: list[Citation] = []
+    selected_blocks: list[tuple[Citation, str]] = []
 
     for chunk in chunks:
-        candidate_text = "\n\n".join((*selected_text, chunk.text))
+        candidate_text = "\n\n".join(
+            (text for _, text in selected_blocks)
+        )
+        candidate_text = "\n\n".join(
+            part for part in (candidate_text, chunk.text) if part
+        )
         token_count = len(encoding.encode(candidate_text))
         if token_count > max_tokens:
             continue
-        selected_text.append(chunk.text)
-        citations.append(Citation(doc_id=chunk.document.doc_id, locator=chunk.locator))
+        selected_blocks.append(
+            (
+                Citation(doc_id=chunk.document.doc_id, locator=chunk.locator),
+                chunk.text,
+            )
+        )
 
-    corpus_text = "\n\n".join(selected_text)
+    corpus_text = "\n\n".join(text for _, text in selected_blocks)
     return CorpusContext(
-        text=corpus_text,
+        blocks=tuple(selected_blocks),
         corpus_tokens=len(encoding.encode(corpus_text)),
-        citations=tuple(citations),
     )
 
 
