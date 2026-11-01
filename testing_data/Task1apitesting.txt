@@ -1,0 +1,58 @@
+Use an employee ID from your local `veltrix.db`; the API rejects IDs that aren’t in its `employees` table.
+
+First, run the API from the project directory:
+
+```powershell
+uv run veltrix-api
+```
+
+In another PowerShell window, get a valid employee ID:
+
+```powershell
+uv run python -c "import sqlite3; c=sqlite3.connect('veltrix.db'); print(*c.execute('SELECT employee_id, region, role FROM employees LIMIT 10'), sep='\n')"
+```
+
+Then test retrieval, replacing `E1001` with an ID from that output:
+
+```powershell
+$headers = @{ "X-Employee-Id" = "E1001" }
+$body = @{
+    query = "annual leave policy"
+    limit = 5
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+    -Uri "http://127.0.0.1:8000/search" `
+    -Method Post `
+    -Headers $headers `
+    -ContentType "application/json" `
+    -Body $body
+```
+
+Example response shape:
+
+```json
+{
+  "results": [
+    {
+      "doc_id": "POL-LEAVE-GLOBAL-V2",
+      "title": "Global Leave Policy (Version 2)",
+      "locator": "Annual Leave",
+      "text": "...",
+      "score": 1.23
+    }
+  ]
+}
+```
+
+Try these other request bodies:
+
+```powershell
+# Search holiday-calendar content
+@{ query = "public holidays India"; limit = 3 } | ConvertTo-Json
+
+# Search using a specific reference date
+@{ query = "annual leave"; limit = 5; reference_date = "2025-06-01" } | ConvertTo-Json
+```
+
+The API applies the requester’s database-backed role, region, and reference date before retrieval. Check readiness at `http://127.0.0.1:8000/health`—it returns `{"status":"ok"}` when ingestion is complete.

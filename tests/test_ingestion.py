@@ -3,7 +3,7 @@ import json
 import pymupdf
 from docx import Document
 
-from veltrix_assistant.ingestion.loaders import IngestionError
+from veltrix_assistant.ingestion.loaders import IngestionError, _load_pdf, _looks_like_heading
 from veltrix_assistant.ingestion.pipeline import ManifestError, ingest_corpus
 
 
@@ -134,6 +134,50 @@ def test_unsupported_file_format_fails_explicitly(tmp_path) -> None:
         assert "Unsupported file" in str(exc)
     else:
         raise AssertionError("unsupported format should be rejected")
+
+
+def test_pdf_uses_typographic_headings_as_locators(tmp_path) -> None:
+    path = tmp_path / "typographic-headings.pdf"
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_text((72, 72), "Global Leave Policy", fontsize=18, fontname="hebo")
+    page.insert_text((72, 125), "Policy details", fontsize=13, fontname="hebo")
+    page.insert_text(
+        (72, 155),
+        "Employees may request annual leave using the standard process.",
+        fontsize=10,
+    )
+    document.save(path)
+    document.close()
+
+    sections = _load_pdf(path)
+
+    assert any(section.locator == "Global Leave Policy" for section in sections)
+    assert any(section.locator == "Policy details" for section in sections)
+
+
+def test_pdf_without_detected_headings_uses_page_number_locator(tmp_path) -> None:
+    path = tmp_path / "plain-text.pdf"
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_text(
+        (72, 72),
+        "This page contains readable policy text but no distinct heading.",
+        fontsize=10,
+    )
+    document.save(path)
+    document.close()
+
+    sections = _load_pdf(path)
+
+    assert sections
+    assert all(section.locator == "p. 1" for section in sections)
+
+
+def test_table_label_is_not_misclassified_as_a_heading() -> None:
+    assert not _looks_like_heading("TABLE:")
+    assert not _looks_like_heading("2 years to less than 5 years 1.75 21")
+    assert _looks_like_heading("2. How accrual works")
 
 
 def test_pdf_without_text_requires_ocr(tmp_path, monkeypatch) -> None:
