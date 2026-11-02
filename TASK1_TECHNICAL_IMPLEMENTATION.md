@@ -32,10 +32,10 @@ flowchart LR
 `POST /search` exercises ingestion and retrieval through a FastAPI endpoint.
 It applies Task 2 role, region, and reference-date eligibility before ranking,
 and separates winning upcoming sources from currently applicable results. It
-is not the final assessment `POST /chat` endpoint, and it does not call an LLM.
-The context builder, citation data, and token-count logger are provided for the
-later chat and LLM integration. Task 2's precedence and conflict behavior is
-described in [`TASK2_TECHNICAL_IMPLEMENTATION.md`](./TASK2_TECHNICAL_IMPLEMENTATION.md).
+is a diagnostic endpoint and does not call an LLM. Task 5 connects `/chat` to
+the context builder and OpenAI provider. Task 2's precedence and conflict
+behavior is described in
+[`TASK2_TECHNICAL_IMPLEMENTATION.md`](./TASK2_TECHNICAL_IMPLEMENTATION.md).
 
 ## Module-by-module
 
@@ -148,7 +148,7 @@ it does not infer that differently worded passages have the same meaning.
 
 ### `src/veltrix_assistant/retrieval/context.py`
 
-This module prepares the corpus-text portion of a future LLM request:
+This module prepares the corpus-text portion of an LLM request:
 
 - `build_corpus_context` appends whole chunks in retrieval order, measuring the
   joined text with `tiktoken`'s `cl100k_base` encoding. It skips any chunk
@@ -161,9 +161,9 @@ This module prepares the corpus-text portion of a future LLM request:
   message suitable for calling immediately before an LLM request.
 
 The token counter measures the joined corpus text, not system instructions,
-conversation history, or source labels added by `formatted_text()`. The
-assessment requires the actual LLM integration to call the logger for every
-request and to ensure the counted corpus text is the text sent.
+conversation history, or source labels added by `formatted_text()`. The OpenAI
+provider logs this count for every request and sends only the selected evidence
+blocks as corpus text.
 
 ### `src/veltrix_assistant/api.py`
 
@@ -214,10 +214,8 @@ uv run pytest
 ## Current boundaries and follow-up work
 
 Task 1 provides automatic extraction, metadata-preserving chunks, local
-retrieval, citation metadata, and token-budget helpers. Before the final
-assessment submission, the chat implementation still needs to integrate the
-context builder and token logger with every LLM call and enforce the complete
-document precedence/conflict rules, upcoming-change behavior, final response
-routes, and citation selection. The test API's eligibility filter handles
-role, region, and effective date, but it does not select a winning document
-under the full precedence rules.
+retrieval, citation metadata, and token-budget helpers. Task 5 connects these
+components to `/chat`; the OpenAI prompt receives only pre-filtered current and
+upcoming evidence, including metadata needed to apply the precedence hierarchy.
+Offline mode returns labeled source excerpts instead of synthesizing policy
+answers.

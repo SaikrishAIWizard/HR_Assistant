@@ -236,6 +236,21 @@ class LeaveTools:
             return None
         return region, valid_role, manager_id
 
+    def can_access_employee_data(self, employee_id: str) -> bool:
+        """Check target scope without invoking a user-visible tool operation."""
+        try:
+            with self._connection() as connection:
+                requester = self._requester(connection)
+                return requester is not None and self._target_is_allowed(
+                    connection,
+                    requester,
+                    self._authenticated_employee_id,
+                    employee_id,
+                )
+        except sqlite3.Error:
+            _LOGGER.exception("Leave-data access check failed")
+            raise
+
     @staticmethod
     def _target_is_allowed(
         connection: sqlite3.Connection,
@@ -308,6 +323,77 @@ class LeaveTools:
             {
                 "employee_id": employee_id,
                 "balances": balances,
+            },
+        )
+
+    def get_annual_balance_projection_inputs(
+        self,
+        employee_id: str,
+    ) -> LeaveToolResult:
+        """Return authorized annual balance and join date for a forecast."""
+        name = "get_leave_balance"
+        args: dict[str, object] = {
+            "employee_id": employee_id,
+            "leave_type": "annual",
+        }
+        try:
+            with self._connection() as connection:
+                requester = self._requester(connection)
+                if requester is None or not self._target_is_allowed(
+                    connection,
+                    requester,
+                    self._authenticated_employee_id,
+                    employee_id,
+                ):
+                    return _error(name, args, _UNAUTHORIZED)
+                employee_columns = {
+                    str(row[1])
+                    for row in connection.execute(
+                        "PRAGMA table_info(employees)"
+                    ).fetchall()
+                }
+                if "join_date" not in employee_columns:
+                    return _error(
+                        name,
+                        args,
+                        "A join date is required to estimate future annual leave.",
+                    )
+                row = connection.execute(
+                    """
+                    SELECT employees.join_date, leave_balances.balance_days
+                    FROM employees
+                    JOIN leave_balances USING (employee_id)
+                    WHERE employees.employee_id = ?
+                      AND leave_balances.leave_type = 'annual'
+                    """,
+                    (employee_id,),
+                ).fetchone()
+        except sqlite3.Error:
+            _LOGGER.exception("Annual leave projection input lookup failed")
+            return _error(name, args, "Leave data is temporarily unavailable.")
+
+        if row is None:
+            return _error(
+                name,
+                args,
+                "A join date or annual leave balance is unavailable for this employee.",
+            )
+        try:
+            join_date = date.fromisoformat(str(row[0]))
+        except ValueError:
+            _LOGGER.error("Employee join date is invalid for annual leave projection")
+            return _error(
+                name,
+                args,
+                "A valid join date is required to estimate future annual leave.",
+            )
+        return _success(
+            name,
+            args,
+            {
+                "employee_id": employee_id,
+                "balances": {"annual": float(row[1])},
+                "join_date": join_date.isoformat(),
             },
         )
 
@@ -425,6 +511,120 @@ class LeaveTools:
         ]
         return _success(name, args, {"requests": requests})
 
+    def _validate_apply_leave(
+        self,
+        connection: sqlite3.Connection,
+        leave_type: str,
+        start_date: date,
+        end_date: date,
+    ) -> tuple[int, float] | str:
+        requester = self._requester(connection)
+        if requester is None:
+            return _UNAUTHORIZED
+        holidays = get_public_holidays(
+            self._chunks,
+            region=requester[0],
+            reference_date=self._today,
+        )
+        working_days = count_working_days(start_date, end_date, holidays)
+        if working_days == 0:
+            return "The selected date range contains zero working days."
+
+        overlap = connection.execute(
+            """
+            SELECT 1 FROM leave_requests
+            WHERE employee_id = ?
+              AND status IN ('pending', 'approved')
+              AND start_date <= ?
+              AND end_date >= ?
+            LIMIT 1
+            """,
+            (
+                self._authenticated_employee_id,
+                end_date.isoformat(),
+                start_date.isoformat(),
+            ),
+        ).fetchone()
+        if overlap is not None:
+            return "The date range overlaps an existing pending or approved request."
+
+        balance_row = connection.execute(
+            """
+            SELECT balance_days FROM leave_balances
+            WHERE employee_id = ? AND leave_type = ?
+            """,
+            (self._authenticated_employee_id, leave_type),
+        ).fetchone()
+        if balance_row is None:
+            return f"No {leave_type} leave balance exists for the requester."
+        balance = float(balance_row[0])
+        if working_days > balance:
+            return (
+                f"Insufficient {leave_type} leave balance: "
+                f"{working_days} working days requested, {balance:g} available."
+            )
+        return working_days, balance
+
+    def preview_apply_leave(
+        self,
+        leave_type: str | None,
+        start_date: date | str,
+        end_date: date | str,
+    ) -> LeaveToolResult:
+        """Validate an application without changing balances or requests."""
+        name = "apply_leave"
+        args: dict[str, object] = {
+            "leave_type": leave_type,
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+        parsed_start = _parse_tool_date(start_date)
+        parsed_end = _parse_tool_date(end_date)
+        if parsed_start is None or parsed_end is None:
+            return _error(name, args, "start_date and end_date must use YYYY-MM-DD format.")
+        if leave_type not in {"annual", "sick"}:
+            message = (
+                "leave_type is required; ask the employee to choose annual or sick."
+                if leave_type is None
+                else "leave_type must be 'annual' or 'sick'."
+            )
+            return _error(name, args, message)
+        if parsed_start.year != 2026 or parsed_end.year != 2026:
+            return _error(name, args, "Both leave dates must be within calendar year 2026.")
+        if parsed_start < self._today:
+            return _error(name, args, "start_date must be today or later.")
+        if parsed_end < parsed_start:
+            return _error(name, args, "end_date must be on or after start_date.")
+
+        try:
+            with self._connection() as connection:
+                validation = self._validate_apply_leave(
+                    connection,
+                    leave_type,
+                    parsed_start,
+                    parsed_end,
+                )
+        except HolidayCalendarError as exc:
+            return _error(name, args, str(exc))
+        except sqlite3.Error:
+            _LOGGER.exception("Leave application validation failed")
+            return _error(name, args, "Leave data is temporarily unavailable.")
+        if isinstance(validation, str):
+            return _error(name, args, validation)
+        working_days, balance = validation
+        return _success(
+            name,
+            args,
+            {
+                "employee_id": self._authenticated_employee_id,
+                "leave_type": leave_type,
+                "start_date": parsed_start.isoformat(),
+                "end_date": parsed_end.isoformat(),
+                "working_days": working_days,
+                "balance_remaining": balance,
+            },
+        )
+
     def apply_leave(
         self,
         leave_type: str | None,
@@ -461,66 +661,15 @@ class LeaveTools:
         try:
             with self._connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
-                requester = self._requester(connection)
-                if requester is None:
-                    return _error(name, args, _UNAUTHORIZED)
-                region = requester[0]
-                holidays = get_public_holidays(
-                    self._chunks,
-                    region=region,
-                    reference_date=self._today,
+                validation = self._validate_apply_leave(
+                    connection,
+                    leave_type,
+                    start_date,
+                    end_date,
                 )
-                working_days = count_working_days(start_date, end_date, holidays)
-                if working_days == 0:
-                    return _error(
-                        name,
-                        args,
-                        "The selected date range contains zero working days.",
-                    )
-
-                overlap = connection.execute(
-                    """
-                    SELECT 1 FROM leave_requests
-                    WHERE employee_id = ?
-                      AND status IN ('pending', 'approved')
-                      AND start_date <= ?
-                      AND end_date >= ?
-                    LIMIT 1
-                    """,
-                    (
-                        self._authenticated_employee_id,
-                        end_date.isoformat(),
-                        start_date.isoformat(),
-                    ),
-                ).fetchone()
-                if overlap is not None:
-                    return _error(
-                        name,
-                        args,
-                        "The date range overlaps an existing pending or approved request.",
-                    )
-
-                balance_row = connection.execute(
-                    """
-                    SELECT balance_days FROM leave_balances
-                    WHERE employee_id = ? AND leave_type = ?
-                    """,
-                    (self._authenticated_employee_id, leave_type),
-                ).fetchone()
-                if balance_row is None:
-                    return _error(
-                        name,
-                        args,
-                        f"No {leave_type} leave balance exists for the requester.",
-                    )
-                balance = float(balance_row[0])
-                if working_days > balance:
-                    return _error(
-                        name,
-                        args,
-                        f"Insufficient {leave_type} leave balance: "
-                        f"{working_days} working days requested, {balance:g} available.",
-                    )
+                if isinstance(validation, str):
+                    return _error(name, args, validation)
+                working_days, balance = validation
 
                 request_id = str(uuid.uuid4())
                 created_at = datetime.now(timezone.utc).isoformat()
@@ -675,5 +824,73 @@ class LeaveTools:
                 "status": "cancelled",
                 "working_days_restored": working_days,
                 "balance_remaining": restored_balance,
+            },
+        )
+
+    def preview_cancel_leave(self, request_id: str) -> LeaveToolResult:
+        """Validate a cancellation proposal without changing request or balance."""
+        name = "cancel_leave"
+        args: dict[str, object] = {"request_id": request_id}
+        if not request_id:
+            return _error(name, args, "request_id is required.")
+
+        try:
+            with self._connection() as connection:
+                requester = self._requester(connection)
+                if requester is None:
+                    return _error(name, args, _UNAUTHORIZED)
+                row = connection.execute(
+                    """
+                    SELECT leave_type, start_date, end_date, working_days, status
+                    FROM leave_requests
+                    WHERE request_id = ? AND employee_id = ?
+                    """,
+                    (request_id, self._authenticated_employee_id),
+                ).fetchone()
+                if row is not None:
+                    balance_row = connection.execute(
+                        """
+                        SELECT 1 FROM leave_balances
+                        WHERE employee_id = ? AND leave_type = ?
+                        """,
+                        (self._authenticated_employee_id, row[0]),
+                    ).fetchone()
+                else:
+                    balance_row = None
+        except sqlite3.Error:
+            _LOGGER.exception("Leave cancellation validation failed")
+            return _error(name, args, "Leave data is temporarily unavailable.")
+
+        if row is None:
+            return _error(name, args, _UNAUTHORIZED)
+        if balance_row is None:
+            return _error(
+                name,
+                args,
+                "The leave balance record is missing; the request was not cancelled.",
+            )
+        leave_type, start_date_text, end_date_text, working_days, status = row
+        if status not in {"pending", "approved"}:
+            return _error(
+                name,
+                args,
+                "Only pending or approved leave requests can be cancelled.",
+            )
+        if date.fromisoformat(start_date_text) <= self._today:
+            return _error(
+                name,
+                args,
+                "Only leave requests with a start_date after today can be cancelled.",
+            )
+        return _success(
+            name,
+            args,
+            {
+                "request_id": request_id,
+                "leave_type": leave_type,
+                "start_date": start_date_text,
+                "end_date": end_date_text,
+                "working_days": working_days,
+                "status": status,
             },
         )

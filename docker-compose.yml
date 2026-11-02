@@ -1,0 +1,31 @@
+services:
+  api:
+    build:
+      context: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      CORPUS_DIR: /app/data/corpus
+      MANIFEST_PATH: /app/data/manifest.json
+      DB_PATH: /app/data/veltrix.db
+      APP_HOST: 0.0.0.0
+      APP_PORT: "8000"
+      APP_TODAY: ${APP_TODAY:-}
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-20}
+      TESSERACT_CMD: ${TESSERACT_CMD:-}
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 110
+      start_period: 10s
+    restart: unless-stopped

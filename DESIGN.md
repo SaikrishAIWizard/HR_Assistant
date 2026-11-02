@@ -1,50 +1,51 @@
-# Security and privacy design
+# Design
 
-## Trusted identity and session ownership
+## Ingestion, retrieval, and policy decisions
 
-- Every protected API request requires `X-Employee-Id`. The value is looked up
-  in the configured SQLite `employees` table; role and region are never read
-  from request-body fields or user claims.
-- Unknown employee IDs receive the same generic 401 response. Invalid or
-  unavailable employee-directory records fail closed rather than receiving
-  default permissions.
-- The optional `session_id` on `POST /search` is stored in the assistant-owned
-  `assistant_sessions` table. Its first authenticated employee becomes its
-  owner. Reuse by another employee returns 403, and the original ownership is
-  not overwritten. The table is created without changing assessment-owned
-  tables or columns.
+- `ingestion/loaders.py` extracts PDF text/tables, DOCX paragraphs/tables,
+  Markdown, and HTML. It renders textless PDF pages and runs Tesseract OCR;
+  extraction failures fail ingestion instead of silently dropping a document.
+- `ingestion/chunking.py` makes 500-token `cl100k_base` chunks with document
+  metadata and source locators. Local BM25 is deterministic and appropriate
+  for the supplied small corpus; `retrieval/bm25.py` filters metadata before
+  ranking. `retrieval/context.py` caps each model call at 3,000 corpus-text
+  tokens and logs that count before the call.
+- `policy/applicability.py` enforces role, region, effective date, and
+  authority/scope/recency precedence. Tied top sources remain available to
+  explain conflicts. `conversation.py` uses a requested past date and labels
+  readable future winners separately. The system prompt contains instructions
+  only; retrieved text is supplied separately as untrusted JSON evidence.
 
-## Document and employee-data authorization
+## Access control and privacy
 
-- Role, region, effective date, and document audience are checked by the
-  retrieval filter before BM25 ranks or returns content. Results therefore
-  do not reveal restricted document IDs or text to an unauthorized requester.
-- Leave tools are bound to the authenticated employee and re-check self,
-  manager/direct-report, and HR access against the database for each operation.
-  Unauthorized and nonexistent employee targets receive the same fixed
-  refusal.
-- Employee records should be projected through
-  `sanitize_employee_record` before display or model use. It returns no record
-  to unauthorized requesters, exposes names only to the employee, their
-  manager, or HR, masks email to `first-character***@domain`, and never includes
-  phone numbers. Leave tools do not return employee names, email addresses, or
-  phone numbers.
-- Logs must contain operational status and aggregate counts only. Do not log
-  employee names, email addresses, phone numbers, request bodies, or retrieved
-  document text.
+- `api.py` resolves `X-Employee-Id` through `lookup_employee_identity`; role
+  and region never come from the message. `SessionBindingStore.bind` in
+  `security/identity.py` prevents session reuse by a different employee.
+- `/search` and `/chat` apply `is_document_applicable` or
+  `is_document_readable` from `policy/applicability.py` before retrieval
+  results can reach the model. `tools/leave.py` authorizes every read and write
+  through the authenticated employee; `can_access_employee_data` checks
+  employee, direct-report manager, and HR scope. Write previews do not mutate
+  data; execution rechecks rules in the same SQLite transaction as the update.
+- Logs exclude message bodies, names, email, phone, and retrieved text.
+  Employee records and ordinary leave-tool results are not passed to the model.
+  A future-balance calculation receives only its current balance, join date,
+  target date, the question, and authorized policy evidence. Email, phone, and
+  employee-ID patterns in the question are redacted. Model citations are
+  validated against supplied evidence. Offline mode returns source excerpts
+  without a model call and does not forecast balances.
+- `assess_user_message` in `security/guards.py` refuses common bulk-data and
+  instruction-override requests. Retrieved text cannot invoke tools or change
+  permissions; authorization remains in application code.
 
-## Untrusted content and refusal boundary
+## Failure modes and scale
 
-- User-provided messages are classified by `assess_user_message`. Bulk
-  employee-data requests and common instruction-override/hidden-data requests
-  produce a fixed refusal decision (`route="refuse"`); ordinary HR questions
-  continue.
-- Retrieved documents are evidence only. Document text must never select or
-  invoke tools, change identity/permissions, or override system/developer
-  instructions.
-- The repository currently implements `/search` as a retrieval diagnostic
-  endpoint, not the assessment's `/chat` endpoint. Requirement 5 must invoke
-  the message guard before retrieval and tool selection, stop on a refusal,
-  and pass only authorized, relevant evidence and minimum necessary data to a
-  model. The guard is a deterministic defense-in-depth check, not a substitute
-  for authorization checks in each tool.
+Missing OCR, unreadable sources, invalid identities, session conflicts, and
+invalid proposals fail explicitly or fail closed. SQLite transactions prevent
+partial leave/balance updates and cancellation/restoration. These checks are
+covered by ingestion, access-control, leave, and chat integration tests.
+
+With 10,000 documents, in-memory BM25 scoring over every chunk is the first
+scaling limit. Replace it with a persistent local index that supports metadata
+prefilters, batch indexing, and incremental re-ingestion. Preserve the same
+authorization filters before evidence reaches the model.

@@ -59,16 +59,19 @@ Rejected writes return `error` and leave the database unchanged.
   cancelled and restores its recorded working days in one transaction. If
   either update fails, both changes roll back.
 - `get_leave_balance` reports stored balances only; it does not calculate
-  future accrual. Request and team queries include only the fields needed by
-  the caller.
+  future accrual. For a future-balance question, Task 5 retrieves the current
+  annual balance and join date separately, then combines them with applicable
+  accrual evidence through the configured LLM. Request and team queries include
+  only the fields needed by the caller.
 
 ### `src/veltrix_assistant/api.py`
 
 After ingestion, the API stores a `LeaveToolFactory` in app state. The tools
 are not exposed through separate HTTP routes because the assessment expects
-tool calls to be orchestrated by the chat endpoint. The future chat workflow
-must create the per-request tools using the authenticated `X-Employee-Id` and
-must apply Task 5's confirmation flow before invoking either write tool.
+tool calls to be orchestrated by `POST /chat`. The chat handler creates the
+per-request tools using the authenticated `X-Employee-Id`. Task 5 validates
+write proposals without mutation, requests confirmation, and only then invokes
+the write tool, which re-checks its rules inside the database transaction.
 
 ## Validation
 

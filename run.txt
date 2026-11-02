@@ -9,6 +9,12 @@ uv run pytest -v tests/test_applicability.py::test_eligibility_uses_role_region_
 # Task 3: regional holidays, atomic application, permissions, cancellation
 uv run pytest -v tests/test_leave_tools.py::test_calendar_selection_is_region_specific tests/test_leave_tools.py::test_apply_leave_counts_holidays_and_debits_balance_atomically tests/test_leave_tools.py::test_balance_and_request_tools_enforce_employee_manager_and_hr_scopes tests/test_leave_tools.py::test_cancel_leave_marks_cancelled_and_restores_balance tests/test_leave_tools.py::test_failed_balance_restore_rolls_back_request_cancellation
 
+# Task 4: trusted identity, session ownership, privacy, and request guard
+uv run pytest -v tests/test_security.py::test_employee_identity_is_resolved_only_from_the_database tests/test_security.py::test_session_is_bound_once_and_rejects_a_different_employee tests/test_security.py::test_email_is_masked_and_phone_is_never_projected tests/test_security.py::test_message_guard_refuses_injection_hidden_data_and_bulk_requests
+
+# Task 5: chat routes, clarifications, and confirmed writes
+uv run pytest -v tests/test_api.py::test_chat_returns_exact_rag_no_answer_and_refusal_routes tests/test_api.py::test_chat_clarifies_all_missing_apply_fields_at_once tests/test_api.py::test_chat_write_requires_confirmation_and_revalidates_on_execution tests/test_api.py::test_chat_changed_write_proposal_replaces_the_old_pending_action tests/test_api.py::test_chat_cancellation_executes_only_after_confirmation tests/test_api.py::test_chat_confirmation_is_limited_to_bound_session_owner
+
 # Run the complete test suite
 uv run pytest -v
 

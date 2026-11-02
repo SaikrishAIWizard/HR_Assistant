@@ -44,11 +44,19 @@ _BULK_EMPLOYEE_DATA_PATTERN = re.compile(
     r".{0,60}\b(balance|leave|request|salary|email|phone|contact|data)\b",
     re.IGNORECASE,
 )
+_EMPLOYEE_ID_PATTERN = re.compile(r"\b[A-Z][0-9]{3,}\b", re.IGNORECASE)
+_EMPLOYEE_DATA_PATTERN = re.compile(
+    r"\b(balance|leave|request|salary|email|phone|contact|employee data)\b",
+    re.IGNORECASE,
+)
 
 
 def assess_user_message(message: str) -> RequestSafetyDecision:
     """Flag requests that must be refused before retrieval or tool selection."""
-    if _BULK_EMPLOYEE_DATA_PATTERN.search(message):
+    if _BULK_EMPLOYEE_DATA_PATTERN.search(message) or (
+        len(set(_EMPLOYEE_ID_PATTERN.findall(message))) > 1
+        and _EMPLOYEE_DATA_PATTERN.search(message)
+    ):
         return RequestSafetyDecision(
             route="refuse",
             reason="bulk_employee_data",

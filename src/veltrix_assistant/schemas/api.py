@@ -3,16 +3,10 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field
-from pydantic.types import StringConstraints
 
-
-SessionId = Annotated[
-    str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
-]
+from veltrix_assistant.schemas.chat import SessionId
 
 
 class SearchRequest(BaseModel):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sqlite3
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
@@ -13,7 +14,13 @@ from typing import Annotated
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse
 
+from veltrix_assistant.conversation import respond_to_message
+from veltrix_assistant.llm import LLMError, create_llm_provider
 from veltrix_assistant.ingestion.pipeline import ingest_corpus
 from veltrix_assistant.policy.applicability import (
     get_upcoming_winners,
@@ -22,6 +29,7 @@ from veltrix_assistant.policy.applicability import (
 )
 from veltrix_assistant.retrieval.bm25 import BM25Retriever
 from veltrix_assistant.schemas.api import SearchRequest, SearchResponse, SearchResult
+from veltrix_assistant.schemas.chat import ChatRequest, ChatResponse
 from veltrix_assistant.schemas.policy import DocumentAudience
 from veltrix_assistant.schemas.security import EmployeeIdentity
 from veltrix_assistant.security.identity import (
@@ -70,6 +78,12 @@ def create_app(
     )
     configured_database = Path(database_path or os.getenv("DB_PATH", "./data/veltrix.db"))
     today = _read_reference_date()
+    llm_provider = create_llm_provider(
+        os.getenv("LLM_PROVIDER", "none"),
+        api_key=os.getenv("OPENAI_API_KEY"),
+        model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
+        timeout_seconds=float(os.getenv("LLM_TIMEOUT_SECONDS", "20")),
+    )
 
     @asynccontextmanager
     async def lifespan(application: FastAPI):
@@ -108,10 +122,22 @@ def create_app(
             _LOGGER.exception("Corpus ingestion failed")
 
     application = FastAPI(
-        title="Veltrix PeopleOps Retrieval Test API",
+        title="Veltrix PeopleOps Assistant",
         version="0.1.0",
         lifespan=lifespan,
     )
+
+    @application.exception_handler(RequestValidationError)
+    async def validation_error_handler(
+        request: Request,
+        exc: RequestValidationError,
+    ) -> Response:
+        if request.url.path == "/chat":
+            return JSONResponse(
+                status_code=400,
+                content={"detail": jsonable_encoder(exc.errors())},
+            )
+        return await request_validation_exception_handler(request, exc)
 
     @application.get("/health")
     async def health(request: Request, response: Response) -> dict[str, str]:
@@ -219,12 +245,72 @@ def create_app(
             reference_date=reference_date,
         )
 
+    @application.post("/chat", response_model=ChatResponse)
+    async def chat(
+        chat_request: ChatRequest,
+        request: Request,
+        x_employee_id: Annotated[str | None, Header(alias="X-Employee-Id")] = None,
+    ) -> ChatResponse:
+        if not x_employee_id:
+            raise HTTPException(status_code=401, detail="A valid employee ID is required")
+        if getattr(request.app.state, "readiness", "loading") != "ready":
+            raise HTTPException(status_code=503, detail="Document ingestion is not ready")
+
+        identity = _read_employee(configured_database, x_employee_id)
+        if identity is None:
+            raise HTTPException(status_code=401, detail="A valid employee ID is required")
+
+        session_store: SessionBindingStore = request.app.state.session_binding_store
+        try:
+            if not session_store.bind(chat_request.session_id, identity.employee_id):
+                raise HTTPException(
+                    status_code=403,
+                    detail="This session belongs to another employee",
+                )
+            leave_tool_factory: LeaveToolFactory = request.app.state.leave_tool_factory
+            return await asyncio.to_thread(
+                respond_to_message,
+                message=chat_request.message,
+                session_id=chat_request.session_id,
+                identity=identity,
+                retriever=request.app.state.retriever,
+                tools=leave_tool_factory.for_employee(identity.employee_id),
+                session_store=session_store,
+                today=today,
+                llm_provider=llm_provider,
+            )
+        except LLMError as exc:
+            _LOGGER.error("Language model request failed: %s", exc)
+            raise HTTPException(
+                status_code=502,
+                detail="The language model is temporarily unavailable",
+            ) from None
+        except IdentityDirectoryError:
+            _LOGGER.exception("Could not read or update chat session state")
+            raise HTTPException(
+                status_code=503,
+                detail="Conversation state is temporarily unavailable",
+            ) from None
+        except sqlite3.Error:
+            _LOGGER.exception("Could not check chat data access")
+            raise HTTPException(
+                status_code=503,
+                detail="Leave data is temporarily unavailable",
+            ) from None
+        except ValueError:
+            _LOGGER.exception("Stored chat session state is invalid")
+            raise HTTPException(
+                status_code=503,
+                detail="Conversation state is temporarily unavailable",
+            ) from None
+
     return application
 
 
 def run() -> None:
     """Run the local API server."""
     load_dotenv(override=False)
+    logging.basicConfig(level=logging.INFO)
     host = os.getenv("APP_HOST", "127.0.0.1")
     port = int(os.getenv("APP_PORT", "8000"))
     uvicorn.run(create_app(), host=host, port=port)

@@ -10,24 +10,24 @@ before ranking them. Leave tools independently enforce access against the
 database, and safe employee-record projection masks email and omits phone
 numbers.
 
-The repository does not yet implement the assessment's `/chat` endpoint.
-Consequently, the prompt-safety guard and privacy projection are available as
-tested helpers, but Task 5 must call them in the final request workflow.
-This document distinguishes those implemented foundations from the remaining
-integration.
+The `/chat` endpoint is now implemented in Task 5 and consumes the
+prompt-safety guard before retrieval or tool selection. The privacy projection
+remains a reusable boundary for future profile features. Chat does not load
+employee names, email, or phone. Annual-leave projections send only the
+necessary current balance, join date, and target date with authorized evidence.
 
 ## Security requirements and implementation status
 
 | Requirement | Implementation |
 |---|---|
 | Use the employee database as the source for role and region | `lookup_employee_identity` reads the employee row; unrecognized or invalid roles do not receive default access. |
-| Bind a conversation session to its first employee | Optional `session_id` values on `/search` are persisted in `assistant_sessions`; another employee receives 403. |
-| Filter unreadable documents before model exposure | `/search` passes role, region, and date predicates into the retriever before it returns results. |
+| Bind a conversation session to its first employee | `session_id` values on `/chat` (and optional `/search` diagnostic requests) are persisted in `assistant_sessions`; another employee receives 403. |
+| Filter unreadable documents before model exposure | `/search` and `/chat` apply role, region, and date predicates before results are returned or sent to the model. |
 | Restrict employee leave data | Leave tools authorize self, manager/direct-report, and HR access in each operation; HR reads are one target per call. |
 | Give the same denial for unauthorized and nonexistent targets | Leave tools return a fixed refusal for both cases. |
 | Protect personal data | Employee-record projection masks email, omits phone, and includes names only for authorized viewers. Leave-tool output contains no names, emails, or phone numbers. |
 | Treat prompt/document content as untrusted | A user-message guard returns refusal decisions for common override, hidden-data, and bulk-data patterns. Retrieved document text must remain evidence only. |
-| Integrate safety decisions into `/chat` | Pending Task 5; no `/chat` endpoint currently consumes the guard. |
+| Integrate safety decisions into `/chat` | `POST /chat` runs the guard before retrieval and tool selection; a refusal stops the request. |
 
 ## Module-by-module
 
@@ -50,7 +50,7 @@ integration.
 
 - `EmployeeIdentity` validates the trusted employee ID, region, and role.
 - `RequestSafetyDecision` carries a `continue` or `refuse` route, an optional
-  reason, and a fixed refusal message for use by a future chat handler.
+  reason, and a fixed refusal message consumed by `POST /chat`.
 
 ### `src/veltrix_assistant/security/privacy.py`
 
@@ -70,9 +70,9 @@ integration.
   hidden-data, or bulk employee-data patterns, with a fixed refusal message.
 - Ordinary HR questions return `route="continue"`.
 - This is a deterministic defense-in-depth check, not a complete natural
-  language security classifier. Authorization must still be enforced at
-  retrieval and inside each tool. Task 5 must run the guard before retrieval
-  and tool selection and stop processing when it returns `refuse`.
+  language security classifier. Authorization is also enforced at retrieval
+  and inside each tool. Task 5 runs the guard before retrieval and tool
+  selection and stops processing when it returns `refuse`.
 - Retrieved documents are untrusted evidence. Their contents must never be
   treated as instructions, used to change identity or permissions, or allowed
   to invoke tools.
@@ -98,8 +98,8 @@ continue to work.
   current results must be readable and effective; upcoming candidates must be
   readable and future-dated. These filters are supplied to BM25 before ranking,
   so restricted text is not returned as a result.
-- `/search` is a retrieval diagnostic endpoint, not the assessment's `/chat`
-  endpoint. It currently does not consume `assess_user_message`.
+- `/search` remains a retrieval diagnostic endpoint. The `/chat` endpoint
+  consumes `assess_user_message` before retrieval or tool selection.
 
 ### `src/veltrix_assistant/tools/leave.py`
 
@@ -129,10 +129,10 @@ Task 3's leave-tool authorization is an independent enforcement layer:
 4. Any employee profile intended for display or model context must first pass
    through `sanitize_employee_record`; only the minimum authorized fields
    should be sent onward.
-5. In the future `/chat` workflow, `assess_user_message` must run before
-   retrieval or tool selection. A refusal must stop the workflow. Only
-   authorized evidence and the minimum necessary data should be passed to a
-   model.
+5. `/chat` runs `assess_user_message` before retrieval or tool selection. A
+   refusal stops the workflow. When OpenAI is configured, only authorized
+   policy evidence and the question reach the model; future-balance requests
+   additionally receive the minimum balance, join-date, and target-date facts.
 
 The employee ID header is an identity lookup key, not by itself a cryptographic
 authentication mechanism. A deployed service must ensure that the header is
@@ -158,6 +158,9 @@ Run the complete project test suite from the repository root:
 uv run pytest -q
 ```
 
-At the time this guide was written, all 60 tests passed. The chat guard's
-end-to-end route behavior remains untested until Task 5 implements and wires
-`POST /chat`.
+At the time this guide was updated, Task 5 integration tests exercise the
+guard and route behavior through `POST /chat`.
+
+
+-------------------------------
+In short: SessionBindingStore answers "Does this authenticated employee own this session?", while lookup_employee_identity() answers "What role and region does the employee directory assign to this employee?" Both help establish trusted context before your assistant processes a request.
