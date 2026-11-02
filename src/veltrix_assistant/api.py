@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import sqlite3
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
@@ -20,11 +19,16 @@ from veltrix_assistant.policy.applicability import (
     get_upcoming_winners,
     is_document_applicable,
     is_document_readable,
-    parse_role,
 )
 from veltrix_assistant.retrieval.bm25 import BM25Retriever
 from veltrix_assistant.schemas.api import SearchRequest, SearchResponse, SearchResult
-from veltrix_assistant.schemas.policy import DocumentAudience, Role
+from veltrix_assistant.schemas.policy import DocumentAudience
+from veltrix_assistant.schemas.security import EmployeeIdentity
+from veltrix_assistant.security.identity import (
+    IdentityDirectoryError,
+    SessionBindingStore,
+    lookup_employee_identity,
+)
 from veltrix_assistant.tools.leave import LeaveToolFactory
 
 
@@ -41,31 +45,15 @@ def _read_reference_date() -> date:
         raise ValueError("APP_TODAY must use YYYY-MM-DD format") from exc
 
 
-def _read_employee(database_path: Path, employee_id: str) -> tuple[str, Role] | None:
+def _read_employee(database_path: Path, employee_id: str) -> EmployeeIdentity | None:
     try:
-        with sqlite3.connect(database_path, timeout=5) as connection:
-            row = connection.execute(
-                "SELECT region, role FROM employees WHERE employee_id = ?",
-                (employee_id,),
-            ).fetchone()
-    except sqlite3.Error:
+        return lookup_employee_identity(database_path, employee_id)
+    except IdentityDirectoryError:
         _LOGGER.exception("Could not read employee identity from the configured database")
         raise HTTPException(
             status_code=503,
             detail="Employee directory is temporarily unavailable",
         ) from None
-
-    if row is None:
-        return None
-    region, role = row
-    valid_role = parse_role(role)
-    if valid_role is None or not isinstance(region, str):
-        _LOGGER.error("Employee record has invalid access-control attributes")
-        raise HTTPException(
-            status_code=503,
-            detail="Employee directory contains an invalid access record",
-        )
-    return region, valid_role
 
 
 def create_app(
@@ -100,7 +88,10 @@ def create_app(
                 configured_corpus,
                 configured_manifest,
             )
+            session_store = SessionBindingStore(configured_database)
+            session_store.ensure_schema()
             application.state.retriever = BM25Retriever(corpus.chunks)
+            application.state.session_binding_store = session_store
             application.state.leave_tool_factory = LeaveToolFactory(
                 configured_database,
                 corpus.chunks,
@@ -143,7 +134,26 @@ def create_app(
         identity = _read_employee(configured_database, x_employee_id)
         if identity is None:
             raise HTTPException(status_code=401, detail="A valid employee ID is required")
-        region, role = identity
+        if search_request.session_id is not None:
+            session_store: SessionBindingStore = request.app.state.session_binding_store
+            try:
+                session_belongs_to_employee = session_store.bind(
+                    search_request.session_id,
+                    identity.employee_id,
+                )
+            except IdentityDirectoryError:
+                _LOGGER.exception("Could not verify session ownership")
+                raise HTTPException(
+                    status_code=503,
+                    detail="Session storage is temporarily unavailable",
+                ) from None
+            if not session_belongs_to_employee:
+                raise HTTPException(
+                    status_code=403,
+                    detail="This session belongs to another employee",
+                )
+
+        region, role = identity.region, identity.role
         retriever: BM25Retriever = request.app.state.retriever
         reference_date = search_request.reference_date or today
         audience = DocumentAudience(region=region, role=role)

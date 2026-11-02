@@ -171,6 +171,68 @@ def test_search_requires_employee_header(tmp_path) -> None:
     assert response.status_code == 401
 
 
+def test_search_session_is_bound_to_first_authenticated_employee(tmp_path) -> None:
+    corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
+    app = create_app(
+        corpus_dir=corpus_dir,
+        manifest_path=manifest_path,
+        database_path=database_path,
+    )
+
+    with TestClient(app) as client:
+        _wait_until_ready(client)
+        first_request = client.post(
+            "/search",
+            headers={"X-Employee-Id": "E1001"},
+            json={"query": "annual leave", "session_id": "session-shared"},
+        )
+        same_owner = client.post(
+            "/search",
+            headers={"X-Employee-Id": "E1001"},
+            json={"query": "annual leave", "session_id": "session-shared"},
+        )
+        other_owner = client.post(
+            "/search",
+            headers={"X-Employee-Id": "D1001"},
+            json={"query": "annual leave", "session_id": "session-shared"},
+        )
+
+    assert first_request.status_code == 200
+    assert same_owner.status_code == 200
+    assert other_owner.status_code == 403
+    with sqlite3.connect(database_path) as connection:
+        owner = connection.execute(
+            "SELECT employee_id FROM assistant_sessions WHERE session_id = ?",
+            ("session-shared",),
+        ).fetchone()[0]
+    assert owner == "E1001"
+
+
+def test_session_id_must_not_be_blank_or_unbounded(tmp_path) -> None:
+    corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
+    app = create_app(
+        corpus_dir=corpus_dir,
+        manifest_path=manifest_path,
+        database_path=database_path,
+    )
+
+    with TestClient(app) as client:
+        _wait_until_ready(client)
+        blank = client.post(
+            "/search",
+            headers={"X-Employee-Id": "E1001"},
+            json={"query": "annual leave", "session_id": "   "},
+        )
+        long_id = client.post(
+            "/search",
+            headers={"X-Employee-Id": "E1001"},
+            json={"query": "annual leave", "session_id": "s" * 129},
+        )
+
+    assert blank.status_code == 422
+    assert long_id.status_code == 422
+
+
 def test_search_filters_manager_documents_and_regions(tmp_path) -> None:
     corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
     app = create_app(

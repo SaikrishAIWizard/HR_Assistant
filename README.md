@@ -2,9 +2,10 @@
 
 This repository implements the Veltrix HR-assistant assessment in small, testable
 steps. The current implementation covers **Requirement 1: ingestion and
-retrieval**, **Requirement 2: document applicability and precedence**, and
-**Requirement 3: leave tools and rules**. Identity/session protections and the
-final conversation workflow remain subsequent requirements.
+retrieval**, **Requirement 2: document applicability and precedence**,
+**Requirement 3: leave tools and rules**, and the identity, access-control, and
+privacy foundations of **Requirement 4**. The final chat conversation workflow
+and route integration remain Requirement 5.
 
 ## Requirement 1 plan and implementation
 
@@ -31,6 +32,8 @@ The implementation uses a `src/` package layout:
   precedence, tied-value conflict retention, and upcoming-change checks.
 - `src/veltrix_assistant/tools/` — DB-backed leave tools, permission checks,
   calendar-based working-day counts, and atomic request/balance updates.
+- `src/veltrix_assistant/security/` — database-backed identity, persistent
+  session ownership, safe employee-data projection, and request safety guards.
 - `src/veltrix_assistant/retrieval/` — filtered BM25 search and context budget.
 - `tests/` — focused ingestion, retrieval, and token-budget tests.
 
@@ -64,6 +67,16 @@ The five callable leave tools are bound to an authenticated employee through
 handler; they are not exposed as separate HTTP routes. Their access rules,
 atomicity, and date handling are documented in
 [`TASK3_TECHNICAL_IMPLEMENTATION.md`](./TASK3_TECHNICAL_IMPLEMENTATION.md).
+The retrieval test endpoint resolves identity from the employee database and
+can bind an optional `session_id` to its first authenticated employee. Security
+helpers enforce privacy-safe record projection and classify bulk-data or
+instruction-override requests for refusal before a future chat handler selects
+retrieval or tools. Because `/chat` is not implemented yet, the safety decision
+is not currently an end-to-end chat response; Requirement 5 must consume it
+before tool selection. See [`DESIGN.md`](./DESIGN.md) for security boundaries
+and privacy guarantees, and
+[`TASK4_TECHNICAL_IMPLEMENTATION.md`](./TASK4_TECHNICAL_IMPLEMENTATION.md) for
+the Task 4 implementation details and validation coverage.
 
 The ingestion command reports document and chunk counts without printing
 document contents. Never put real API keys in `.env.example` or commit a local
