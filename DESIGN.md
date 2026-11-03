@@ -40,6 +40,11 @@
   general name recognizer; teams must configure known sensitive terms and
   validate rules against their own data. Redaction can be explicitly disabled
   by configuration.
+- `llm.py` uses a request-planning call to select document search or one of the
+  five leave actions from the user's message alone. It receives no retrieved
+  document text, returns no executable arguments, and logs zero corpus tokens;
+  the application derives arguments and rechecks permissions, leave rules, and
+  write confirmation before executing a selected leave tool.
 - Logs exclude message bodies, names, email, phone, and retrieved text.
   Employee records and ordinary leave-tool results are not passed to the model.
   A future-balance calculation receives only its current balance, join date,

@@ -18,7 +18,7 @@ from veltrix_assistant.policy.applicability import (
 from veltrix_assistant.retrieval.bm25 import BM25Retriever
 from veltrix_assistant.retrieval.context import build_corpus_context
 from veltrix_assistant.retrieval.hybrid import HybridRetriever
-from veltrix_assistant.llm import EvidenceBlock, LLMProvider
+from veltrix_assistant.llm import EvidenceBlock, LLMProvider, RequestPlan
 from veltrix_assistant.provenance import ProvenanceTrace
 from veltrix_assistant.schemas.chat import (
     ChatRoute,
@@ -485,7 +485,8 @@ def _tool_intent(message: str) -> str | None:
     ):
         return "get_team_leave"
     if re.search(
-        r"\b(apply|request|book|take|want|need)\b.{0,50}\b(annual|sick)?\s*leave\b",
+        r"\b(apply|request|book|take|want|need)\b.{0,50}"
+        r"\b(annual|sick)?\s*leaves?\b",
         lowered,
     ) and not any(cue in lowered for cue in _POLICY_CUES):
         return "apply_leave"
@@ -552,14 +553,14 @@ def _retrieval_question(message: str, intent: str | None) -> str:
     return " ".join(policy_clauses) if policy_clauses else message
 
 
-def _has_relevant_query_term(message: str, chunk_text: str) -> bool:
+def _has_relevant_query_term(message: str, chunk: DocumentChunk) -> bool:
     normalized_message = re.sub(
         r"(?<=\w)'s\b|[-_]",
         " ",
         message.casefold(),
     )
     query_terms = {
-        term.casefold()
+        "holiday" if term.casefold() == "holidays" else term.casefold()
         for term in re.findall(r"[\w'-]+", normalized_message)
         if term.casefold() not in _GENERIC_QUERY_TERMS
         and not re.fullmatch(r"(?:19|20)\d{2}", term)
@@ -567,8 +568,11 @@ def _has_relevant_query_term(message: str, chunk_text: str) -> bool:
     if not query_terms:
         return True
     corpus_terms = {
-        term.casefold()
-        for term in re.findall(r"[\w'-]+", chunk_text)
+        "holiday" if term.casefold() == "holidays" else term.casefold()
+        for term in re.findall(
+            r"[\w'-]+",
+            f"{chunk.document.title} {chunk.locator} {chunk.text}",
+        )
     }
     return bool(query_terms & corpus_terms)
 
@@ -651,6 +655,15 @@ def _clarification_for_tool(
             missing.append("leave type (annual or sick)")
         date_range = _apply_date_range(message, today)
         if date_range is None:
+            if re.search(r"\bnext month\b", message, re.IGNORECASE):
+                leave_description = (
+                    f"{leave_type} leave" if leave_type is not None else "leave"
+                )
+                return (
+                    f"What start and end dates next month should I use for your "
+                    f"{leave_description}?",
+                    None,
+                )
             missing.append("start and end dates")
         elif _is_past_date_range(date_range, today):
             return "That date has already passed. What future date or date range should I use?", None
@@ -946,6 +959,7 @@ def respond_to_message(
     session_store: SessionBindingStore,
     today: date,
     llm_provider: LLMProvider | None = None,
+    request_plan: RequestPlan | None = None,
     safety_decision: RequestSafetyDecision | None = None,
     trace: ProvenanceTrace | None = None,
     pii_redaction_enabled: bool = True,
@@ -1062,6 +1076,58 @@ def respond_to_message(
         tool_message = (
             f"apply {retained_leave_type or ''} leave {retained_dates} {message}"
         )
+    planned_search_query: str | None = None
+    planned_action: str | None = None
+    plan = request_plan
+    if (
+        plan is None
+        and llm_provider is not None
+        and pending is None
+        and pending_clarification is None
+    ):
+        plan = llm_provider.plan_request(
+            message,
+            reference_date=today,
+            corpus_tokens=0,
+        )
+    if plan is not None and pending is None and pending_clarification is None:
+        planned_action = plan.action
+        if request_plan is None and trace is not None:
+            trace.record(
+                "intent_router_node",
+                "action_selected",
+                {"action": plan.action},
+            )
+        if plan.action in {
+            "get_leave_balance",
+            "list_leave_requests",
+            "get_team_leave",
+            "apply_leave",
+            "cancel_leave",
+        }:
+            intent = plan.action
+            planned_action = plan.action
+        elif plan.action == "search_documents":
+            if intent is None or not _needs_retrieval(message, intent):
+                intent = None
+                planned_action = "search_documents"
+            else:
+                planned_action = intent
+            planned_search_query = plan.search_query
+        elif plan.action == "clarify":
+            planned_action = intent
+        else:
+            intent = None
+            planned_action = "refuse"
+        if (
+            plan.action == "clarify"
+            and intent is None
+            and _needs_retrieval(message, None)
+        ):
+            return _response(
+                plan.clarification or "What would you like help with?",
+                "clarify",
+            )
     projection_query = _is_future_balance_question(message)
     projection_target = (
         _projection_target_date(message)
@@ -1131,7 +1197,13 @@ def respond_to_message(
                 intent = "cancel_leave"
                 replacement_args = {"request_id": request_id_match.group()}
 
-    needs_retrieval = _needs_retrieval(message, intent)
+    needs_retrieval = (
+        planned_action != "refuse"
+        and (
+            _needs_retrieval(message, intent)
+            or planned_action == "search_documents"
+        )
+    )
     if trace is not None and safety_decision is None:
         trace.record(
             "intent_router_node",
@@ -1294,7 +1366,7 @@ def respond_to_message(
     if needs_retrieval:
         audience = DocumentAudience(region=identity.region, role=identity.role)
         normalized_query = re.sub(r"[-_]", " ", message)
-        retrieval_query = normalized_query
+        retrieval_query = planned_search_query or normalized_query
         if projection_query:
             retrieval_query = (
                 "annual leave accrual rate days earned per month length of "
@@ -1336,12 +1408,12 @@ def respond_to_message(
         matches = [
             match
             for match in raw_matches
-            if _has_relevant_query_term(normalized_query, match.chunk.text)
+            if _has_relevant_query_term(normalized_query, match.chunk)
         ]
         upcoming_candidates = [
             match
             for match in raw_upcoming_candidates
-            if _has_relevant_query_term(normalized_query, match.chunk.text)
+            if _has_relevant_query_term(normalized_query, match.chunk)
         ]
         relevant_documents = tuple(
             dict.fromkeys(

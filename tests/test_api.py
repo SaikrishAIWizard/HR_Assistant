@@ -3,6 +3,7 @@ import sqlite3
 import time
 from datetime import date
 
+import pytest
 from fastapi.testclient import TestClient
 
 from veltrix_assistant.api import create_app
@@ -11,8 +12,14 @@ from veltrix_assistant.llm import (
     GeneratedAnswer,
     LLMError,
     OpenAIChatProvider,
+    RequestPlan,
 )
 from veltrix_assistant.schemas.chat import ChatCitation
+
+
+@pytest.fixture(autouse=True)
+def disable_external_llm_by_default(monkeypatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "none")
 
 
 def _write_fixture_files(tmp_path):
@@ -36,7 +43,10 @@ def _write_fixture_files(tmp_path):
         encoding="utf-8",
     )
     (corpus_dir / "calendar.md").write_text(
-        "# 1. Public holidays 2026\n1 January 2026 Thursday New Year's Day.\n",
+        "# 1. Public holidays 2026\n"
+        "1 January 2026 Thursday New Year's Day.\n"
+        "25 November 2026 Wednesday Foundation Day.\n"
+        "25 December 2026 Friday Christmas Day.\n",
         encoding="utf-8",
     )
     (corpus_dir / "germany.md").write_text(
@@ -541,6 +551,112 @@ def test_chat_uses_historical_reference_date_and_mentions_upcoming_change(
     }
 
 
+def test_chat_retrieves_upcoming_holidays_from_calendar_section_metadata(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("APP_TODAY", "2026-11-02")
+    monkeypatch.setenv("LLM_PROVIDER", "none")
+    corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
+    app = create_app(
+        corpus_dir=corpus_dir,
+        manifest_path=manifest_path,
+        database_path=database_path,
+    )
+
+    with TestClient(app) as client:
+        _wait_until_ready(client)
+        response = _chat(client, "Please check the upcoming holidays")
+
+    body = response.json()
+    assert body["route"] == "rag"
+    assert "25 November 2026" in body["answer"]
+    assert "25 December 2026" in body["answer"]
+    assert any(
+        citation["doc_id"] == "CAL-2026"
+        for citation in body["citations"]
+    )
+
+
+def test_orchestrator_selects_calendar_search_for_upcoming_holidays(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("APP_TODAY", "2026-11-02")
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
+    planned_messages: list[str] = []
+
+    def fake_plan(
+        self: OpenAIChatProvider,
+        message: str,
+        *,
+        reference_date: date,
+        corpus_tokens: int,
+    ) -> RequestPlan:
+        assert isinstance(self, OpenAIChatProvider)
+        assert reference_date == date(2026, 11, 2)
+        assert corpus_tokens == 0
+        planned_messages.append(message)
+        return RequestPlan(
+            action="search_documents",
+            search_query="public holidays 2026",
+        )
+
+    def fake_generate(
+        self: OpenAIChatProvider,
+        question: str,
+        evidence: tuple[EvidenceBlock, ...],
+        *,
+        reference_date: date,
+        corpus_tokens: int,
+        tool_facts: dict[str, object] | None = None,
+    ) -> GeneratedAnswer:
+        del reference_date, corpus_tokens
+        assert isinstance(self, OpenAIChatProvider)
+        assert "upcoming holidays" in question.casefold()
+        assert tool_facts is None
+        calendar = next(
+            item for item in evidence
+            if item.citation.doc_id == "CAL-2026"
+        )
+        assert "25 November 2026" in calendar.text
+        return GeneratedAnswer(
+            status="answered",
+            answer="Upcoming holidays include Foundation Day on 25 November and Christmas Day on 25 December.",
+            citations=[
+                ChatCitation(
+                    doc_id=calendar.citation.doc_id,
+                    locator=calendar.citation.locator,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(OpenAIChatProvider, "plan_request", fake_plan)
+    monkeypatch.setattr(OpenAIChatProvider, "generate_answer", fake_generate)
+    app = create_app(
+        corpus_dir=corpus_dir,
+        manifest_path=manifest_path,
+        database_path=database_path,
+    )
+
+    with TestClient(app) as client:
+        _wait_until_ready(client)
+        response = _chat(
+            client,
+            "Please check the upcoming holidays",
+            "planned-holidays",
+        )
+
+    body = response.json()
+    assert body["route"] == "rag"
+    assert "25 November" in body["answer"]
+    assert body["citations"][0]["doc_id"] == "CAL-2026"
+    assert body["tool_calls"] == []
+    assert planned_messages == ["Please check the upcoming holidays"]
+
+
 def test_configured_llm_receives_only_authorized_evidence(
     tmp_path,
     monkeypatch,
@@ -576,6 +692,14 @@ def test_configured_llm_receives_only_authorized_evidence(
             ],
         )
 
+    monkeypatch.setattr(
+        OpenAIChatProvider,
+        "plan_request",
+        lambda self, message, *, reference_date, corpus_tokens: RequestPlan(
+            action="search_documents",
+            search_query="annual leave policy",
+        ),
+    )
     monkeypatch.setattr(OpenAIChatProvider, "generate_answer", fake_generate)
     app = create_app(
         corpus_dir=corpus_dir,
@@ -638,6 +762,13 @@ def test_hybrid_balance_question_supplies_authorized_tool_facts(
             ],
         )
 
+    monkeypatch.setattr(
+        OpenAIChatProvider,
+        "plan_request",
+        lambda self, message, *, reference_date, corpus_tokens: RequestPlan(
+            action="get_leave_balance",
+        ),
+    )
     monkeypatch.setattr(OpenAIChatProvider, "generate_answer", fake_generate)
     app = create_app(
         corpus_dir=corpus_dir,
@@ -678,6 +809,14 @@ def test_chat_explains_exhausted_model_quota(
             error_code="credit_balance_exhausted",
         )
 
+    monkeypatch.setattr(
+        OpenAIChatProvider,
+        "plan_request",
+        lambda self, message, *, reference_date, corpus_tokens: RequestPlan(
+            action="search_documents",
+            search_query="annual leave policy",
+        ),
+    )
     monkeypatch.setattr(OpenAIChatProvider, "generate_answer", fail_generation)
     app = create_app(
         corpus_dir=corpus_dir,
@@ -763,6 +902,14 @@ def test_future_balance_uses_current_balance_join_date_and_policy_evidence(
             ],
         )
 
+    monkeypatch.setattr(
+        OpenAIChatProvider,
+        "plan_request",
+        lambda self, message, *, reference_date, corpus_tokens: RequestPlan(
+            action="get_leave_balance",
+            search_query="annual leave accrual schedule",
+        ),
+    )
     monkeypatch.setattr(OpenAIChatProvider, "generate_answer", fake_generate)
     app = create_app(
         corpus_dir=corpus_dir,
@@ -985,6 +1132,48 @@ def test_chat_clarifies_all_missing_apply_fields_at_once(tmp_path, monkeypatch) 
     assert body["citations"] == []
     assert body["tool_calls"] == []
     assert body["pending_confirmation"] is False
+
+
+def test_chat_clarifies_dates_for_plural_sick_leave_request(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("APP_TODAY", "2026-11-02")
+    corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
+    app = create_app(
+        corpus_dir=corpus_dir,
+        manifest_path=manifest_path,
+        database_path=database_path,
+    )
+
+    with TestClient(app) as client:
+        _wait_until_ready(client)
+        clarification = _chat(
+            client,
+            "Can you apply for the 2 sick leaves in next month",
+            "sick-leave-dates",
+        )
+        follow_up = _chat(
+            client,
+            "December 7 to 8",
+            "sick-leave-dates",
+        )
+
+    clarification_body = clarification.json()
+    assert clarification_body["route"] == "clarify"
+    assert "start and end dates next month" in clarification_body["answer"]
+    assert "sick leave" in clarification_body["answer"]
+    assert clarification_body["citations"] == []
+    assert clarification_body["tool_calls"] == []
+
+    follow_up_body = follow_up.json()
+    assert follow_up_body["route"] == "tool"
+    assert follow_up_body["pending_confirmation"] is True
+    assert follow_up_body["tool_calls"][0]["args"] == {
+        "leave_type": "sick",
+        "start_date": "2026-12-07",
+        "end_date": "2026-12-08",
+    }
 
 
 def test_chat_keeps_apply_context_across_date_clarifications(

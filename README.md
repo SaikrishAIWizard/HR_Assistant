@@ -39,6 +39,9 @@ The implementation uses a `src/` package layout:
   budget.
 - `src/veltrix_assistant/workflow.py` — conditional LangGraph routing for
   guards, identity validation, retrieval/tool dispatch, citations, and response.
+  When an LLM is configured, a request planner selects document retrieval or
+  one of the five leave actions; application code validates arguments,
+  permissions, and write confirmations before invoking any leave tool.
 - `src/veltrix_assistant/provenance.py` — versioned, pseudonymous request traces
   persisted in assistant-owned SQLite tables.
 - `tests/` — focused ingestion, retrieval, and token-budget tests.

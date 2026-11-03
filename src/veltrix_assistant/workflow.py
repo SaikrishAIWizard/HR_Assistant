@@ -20,7 +20,7 @@ from veltrix_assistant.conversation import (
     _tool_intent,
     respond_to_message,
 )
-from veltrix_assistant.llm import LLMProvider
+from veltrix_assistant.llm import LLMProvider, RequestPlan
 from veltrix_assistant.policy.applicability import parse_role
 from veltrix_assistant.provenance import ProvenanceTrace
 from veltrix_assistant.retrieval.bm25 import BM25Retriever
@@ -59,6 +59,9 @@ class ChatWorkflowState(TypedDict):
     identity_valid: NotRequired[bool]
     intent: NotRequired[str | None]
     needs_retrieval: NotRequired[bool]
+    request_plan: NotRequired[RequestPlan]
+    planned_action: NotRequired[str | None]
+    planned_search_query: NotRequired[str | None]
     workflow_stage: NotRequired[str]
     response: NotRequired[ChatResponse]
 
@@ -244,17 +247,66 @@ class ChatWorkflow:
         return {"identity_valid": True}
 
     def _intent_router_node(self, state: ChatWorkflowState) -> dict[str, object]:
-        intent = _tool_intent(state["message"])
-        needs_retrieval = _needs_retrieval(state["message"], intent)
+        message = state["message"]
+        intent = _tool_intent(message)
+        plan: RequestPlan | None = None
+        provider = state["llm_provider"]
+        if provider is not None:
+            plan = provider.plan_request(
+                message,
+                reference_date=state["today"],
+                corpus_tokens=0,
+            )
+        planned_action: str | None = None
+        planned_search_query: str | None = None
+        if plan is not None:
+            if plan.action in {
+                "get_leave_balance",
+                "list_leave_requests",
+                "get_team_leave",
+                "apply_leave",
+                "cancel_leave",
+            }:
+                intent = plan.action
+                planned_action = plan.action
+            elif plan.action == "search_documents":
+                if intent is None or not _needs_retrieval(message, intent):
+                    intent = None
+                    planned_action = "search_documents"
+                else:
+                    planned_action = intent
+                planned_search_query = plan.search_query
+            elif plan.action == "clarify":
+                planned_action = intent or "clarify"
+            else:
+                intent = None
+                planned_action = "refuse"
+
+        needs_retrieval = (
+            planned_action != "refuse"
+            and (
+                _needs_retrieval(message, intent)
+                or planned_action == "search_documents"
+            )
+        )
         state["trace"].record(
             "intent_router_node",
             "routed",
             {
                 "intent": intent or "none",
                 "needs_retrieval": needs_retrieval,
+                "action": planned_action or "none",
             },
         )
-        return {"intent": intent, "needs_retrieval": needs_retrieval}
+        result: dict[str, object] = {
+            "intent": intent,
+            "needs_retrieval": needs_retrieval,
+            "planned_action": planned_action,
+            "planned_search_query": planned_search_query,
+        }
+        if plan is not None:
+            result["request_plan"] = plan
+        return result
 
     @staticmethod
     def _after_guard(state: ChatWorkflowState) -> str:
@@ -268,10 +320,15 @@ class ChatWorkflow:
     def _route_intent(state: ChatWorkflowState) -> str:
         message = state["message"]
         intent = state.get("intent")
+        planned_action = state.get("planned_action")
         if _is_confirmation(message) or _is_cancellation(message):
             return "confirmation"
         if _is_ambiguous_leave_check(message):
             return "clarification"
+        if planned_action == "clarify":
+            return "clarification"
+        if planned_action == "refuse":
+            return "fallback"
         if intent is not None:
             return "hybrid" if state.get("needs_retrieval") else "tool"
         if state.get("needs_retrieval"):
@@ -380,4 +437,5 @@ def _run_conversation(
         pii_redaction_enabled=state["pii_redaction_enabled"],
         pii_redaction_mode=state["pii_redaction_mode"],
         pii_sensitive_terms=state["pii_sensitive_terms"],
+        request_plan=state.get("request_plan"),
     )
