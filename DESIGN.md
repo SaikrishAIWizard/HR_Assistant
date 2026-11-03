@@ -41,10 +41,10 @@
   validate rules against their own data. Redaction can be explicitly disabled
   by configuration.
 - `llm.py` uses a request-planning call to select document search or one of the
-  five leave actions from the user's message alone. It receives no retrieved
-  document text, returns no executable arguments, and logs zero corpus tokens;
-  the application derives arguments and rechecks permissions, leave rules, and
-  write confirmation before executing a selected leave tool.
+  five leave actions from the user's message and reference date. It receives no
+  retrieved document text, returns no executable arguments, and logs zero
+  corpus tokens; the application derives arguments and rechecks permissions,
+  leave rules, and write confirmation before executing a selected leave tool.
 - Logs exclude message bodies, names, email, phone, and retrieved text.
   Employee records and ordinary leave-tool results are not passed to the model.
   A future-balance calculation receives only its current balance, join date,
@@ -54,10 +54,12 @@
 - `assess_user_message` in `security/guards.py` refuses common bulk-data and
   instruction-override requests. Retrieved text cannot invoke tools or change
   permissions; authorization remains in application code.
-- `workflow.py` routes requests through LangGraph guard, identity, intent,
-  retrieval/tool dispatch, conversation, citation-validation, and response
-  nodes. Conditional branches preserve direct confirmation and refusal paths.
-  Set `LANGGRAPH_ENABLED=false` to use the direct compatibility flow.
+- `workflow.py` runs the LangGraph guard, identity validation, intent router,
+  dispatch, conversation, citation-validation, and response nodes. Dispatch
+  nodes record the selected branch; retrieval and leave-tool operations run in
+  the conversation handler, which applies requester-scoped document filters
+  and existing tool permissions. When LangGraph is disabled, that handler
+  provides the direct compatibility flow.
 - `provenance.py` records Version 2 graph/request traces, retrieval method and
   ranks, selected source identifiers and effective dates, tool outcomes,
   citation-validation outcome, and token counts. Employee/session references
@@ -85,6 +87,5 @@ address these cases.
 
 BM25 remains in memory and scales linearly with the chunk set; Chroma persists
 vectors and supports metadata prefilters and incremental synchronization.
-For larger corpora, benchmark batch ingestion, embedding throughput, index
-startup, and authorization-filtered recall. Preserve the same pre-retrieval
-authorization boundary when scaling or changing providers.
+Preserve the same pre-retrieval authorization boundary when scaling or changing
+providers.

@@ -77,26 +77,42 @@ Run the required test suite with `make test`.
 ## Architecture
 
 ```mermaid
-flowchart LR
-    C[Corpus and manifest] --> I[Ingestion and OCR]
-    I --> R[Token-bounded chunks]
-    R --> B[Local BM25]
-    R --> V[(Persistent Chroma)]
-    U[Employee request] --> A[FastAPI identity and session checks]
-    A --> G[LangGraph guard and identity nodes]
-    G --> R
-    B --> F[Role, region, date and metadata filters]
+flowchart TD
+    C[Corpus and manifest] --> I[Ingestion, extraction and chunking]
+    I --> K[Chunks with document metadata and locators]
+    K --> B[BM25 index]
+    K --> V[(Persistent Chroma index)]
+
+    U[Employee request] --> A[FastAPI identity lookup and session binding]
+    A --> G[LangGraph safety guard and identity validation]
+    G --> O[Intent router and request planner]
+    O --> D[Conversation execution]
+    D -->|Search with requester context| F[Role, region, date and precedence filters]
+    B --> F
     V --> F
-    F --> H[RRF hybrid ranking and evidence selection]
-    G --> T[Authorized leave tools]
-    T --> D[(SQLite)]
-    H --> L[PII-redacted OpenAI or extractive response]
-    L --> CITE[Citation validation]
-    CITE --> U
-    G --> P[(Versioned provenance trace)]
-    H --> P
-    T --> P
+    F --> R[Ranked authorized evidence]
+    R --> L[Answer generation or offline excerpts]
+    L --> CV[Citation validation]
+    CV --> OUT[Chat response]
+    D -->|Validated read or confirmed write| T[Authorized leave tools]
+    T --> DB[(SQLite employee and leave data)]
+    T --> D
+    D --> OUT
+
+    G -. events .-> P[(Pseudonymous provenance trace)]
+    D -. retrieval and tool events .-> P
+    CV -. validation result .-> P
+    P --> PS[(SQLite provenance tables)]
 ```
+
+With an LLM configured, the request planner receives only the user message and
+reference date and selects document search, a leave action, clarification, or
+refusal. It does not receive retrieved documents or execute tools. The
+conversation layer derives tool arguments; tool code validates business rules
+and enforces permissions, and write actions require confirmation. Retrieval
+filters documents for the authenticated requester before evidence can reach
+answer generation. With `LLM_PROVIDER=none`, routing uses the deterministic
+compatibility path and document answers use matching excerpts.
 
 ## Docker
 
@@ -128,9 +144,7 @@ external calls.
   date, target date, and applicable accrual evidence.
 - The application uses the OpenAI chat API when configured. An offline
   extractive mode remains available for local development and tests.
-- LangGraph is used for orchestration and can be disabled for the direct
-  compatibility path. DSPy and LlamaIndex are not needed by this deterministic
-  policy-and-tool workflow.
+- LangGraph orchestration can be disabled for the direct compatibility path.
 - Retrieved chunks are evidence, not instructions. Authorization and leave
   writes remain application-controlled regardless of model output.
 
