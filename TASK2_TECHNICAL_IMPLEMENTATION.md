@@ -24,6 +24,10 @@ to the system date.
 - `is_document_readable` applies role access and region scope independently
   from date. `is_document_applicable` adds the inclusive check
   `effective_date <= reference_date`.
+  When a newer applicable manifest entry explicitly lists an older document in
+  `supersedes_doc_ids`, retrieval excludes that older document for the current
+  reference date. Historical queries still retain the older policy when the
+  replacement was not yet effective.
 - `document_precedence_key` returns a tuple ordered by authority, region
   specificity, and effective date. Official sources (`policy`, `addendum`,
   `memo`, `handbook`, and `calendar`) outrank `faq` and `wiki`; a region-only

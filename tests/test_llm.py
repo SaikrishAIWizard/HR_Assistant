@@ -4,6 +4,8 @@ from datetime import date
 from types import SimpleNamespace
 
 import pytest
+import httpx
+from openai import APIStatusError
 
 from veltrix_assistant.llm import (
     EvidenceBlock,
@@ -79,6 +81,12 @@ def test_openai_provider_sends_grounded_request_and_logs_corpus_tokens(
     messages = request["messages"]
     assert isinstance(messages, list)
     user_message = messages[1]
+    system_message = messages[0]
+    assert isinstance(system_message, dict)
+    assert "Answer every distinct part of the question." in system_message["content"]
+    assert "authenticated requester's region" in system_message["content"]
+    assert "Distinguish a carry-forward limit from an expiration deadline." in system_message["content"]
+    assert "unless the evidence establishes it." in system_message["content"]
     assert isinstance(user_message, dict)
     content = user_message["content"]
     assert isinstance(content, str)
@@ -143,3 +151,90 @@ def test_openai_provider_requires_configured_api_key() -> None:
             reference_date=date(2026, 11, 1),
             corpus_tokens=1,
         )
+
+
+def test_openai_provider_accepts_compatible_base_url(monkeypatch) -> None:
+    client_options: list[dict[str, object]] = []
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **_: SimpleNamespace(
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                content=json.dumps(
+                                    {
+                                        "status": "answered",
+                                        "answer": "Annual leave may carry forward.",
+                                        "citations": [
+                                            {
+                                                "doc_id": "POLICY-1",
+                                                "locator": "Annual leave",
+                                            }
+                                        ],
+                                    }
+                                )
+                            )
+                        )
+                    ]
+                )
+            )
+        )
+    )
+
+    def create_client(**kwargs):
+        client_options.append(kwargs)
+        return fake_client
+
+    monkeypatch.setattr("veltrix_assistant.llm.OpenAI", create_client)
+    provider = OpenAIChatProvider(
+        api_key="test-key",
+        model="test-model",
+        timeout_seconds=10,
+        base_url="https://api.example.test/v1",
+    )
+
+    provider.generate_answer(
+        "Question",
+        _evidence(),
+        reference_date=date(2026, 11, 1),
+        corpus_tokens=1,
+    )
+
+    assert client_options[0]["base_url"] == "https://api.example.test/v1"
+
+
+def test_openai_provider_reports_safe_status_and_model_error_code(monkeypatch) -> None:
+    response = httpx.Response(
+        404,
+        request=httpx.Request("POST", "https://api.example.test/v1/chat/completions"),
+    )
+    provider_error = APIStatusError(
+        "Not Found",
+        response=response,
+        body={"error": {"code": "model_not_found", "message": "unavailable"}},
+    )
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(
+            completions=SimpleNamespace(
+                create=lambda **_: (_ for _ in ()).throw(provider_error)
+            )
+        )
+    )
+    monkeypatch.setattr("veltrix_assistant.llm.OpenAI", lambda **_: fake_client)
+    provider = OpenAIChatProvider(
+        api_key="test-key",
+        model="unavailable-model",
+        timeout_seconds=10,
+    )
+
+    with pytest.raises(LLMError, match="HTTP 404, error_code=model_not_found") as exc:
+        provider.generate_answer(
+            "Question",
+            _evidence(),
+            reference_date=date(2026, 11, 1),
+            corpus_tokens=1,
+        )
+
+    assert exc.value.status_code == 404
+    assert exc.value.error_code == "model_not_found"

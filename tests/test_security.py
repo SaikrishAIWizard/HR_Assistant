@@ -6,7 +6,12 @@ from veltrix_assistant.security.identity import (
     SessionBindingStore,
     lookup_employee_identity,
 )
-from veltrix_assistant.security.privacy import mask_email, sanitize_employee_record
+from veltrix_assistant.security.privacy import (
+    detect_pii,
+    mask_email,
+    redact_pii,
+    sanitize_employee_record,
+)
 
 
 def _create_employee_database(path) -> None:
@@ -119,6 +124,28 @@ def test_email_is_masked_and_phone_is_never_projected() -> None:
     assert safe_view["email"] == "p***@veltrix.example"
     assert "phone" not in safe_view
     assert unauthorized_view is None
+
+
+def test_pii_detection_and_redaction_do_not_return_sensitive_values() -> None:
+    source = (
+        "E1001, person@example.test, +1 415 555 0112, "
+        "123-45-6789, and Example Person"
+    )
+    findings = detect_pii(source, sensitive_terms=("Example Person",))
+    redacted = redact_pii(source, sensitive_terms=("Example Person",))
+
+    assert {finding.kind for finding in findings} == {
+        "employee_id",
+        "email",
+        "phone",
+        "government_id",
+        "configured_sensitive_term",
+    }
+    assert "E1001" not in redacted
+    assert "person@example.test" not in redacted
+    assert "+1 415 555 0112" not in redacted
+    assert "123-45-6789" not in redacted
+    assert "Example Person" not in redacted
 
 
 def test_employee_profile_projection_respects_role_and_omits_phone() -> None:

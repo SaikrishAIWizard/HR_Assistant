@@ -13,9 +13,10 @@ privacy**, and **Requirement 5: conversation routing and confirmation**.
    DOCX paragraphs/tables, and parse HTML and Markdown headings/content.
 3. Split extracted content into token-bounded chunks while retaining document
    metadata, page number, and citation locator.
-4. Search locally with BM25. The retriever requires an `is_allowed` metadata
-   filter and applies it before ranking, so later access-control logic can
-   prevent restricted content from reaching a model.
+4. Search with authorization-first hybrid retrieval: local BM25 and persistent
+   Chroma vector candidates are fused with Reciprocal Rank Fusion. BM25-only
+   mode remains configurable, and filtering happens before results can reach a
+   model.
 5. Build model context under the assessment's hard 3,000-token corpus-text
    ceiling using `cl100k_base`; log that count immediately before each model
    call.
@@ -33,7 +34,13 @@ The implementation uses a `src/` package layout:
   calendar-based working-day counts, and atomic request/balance updates.
 - `src/veltrix_assistant/security/` — database-backed identity, persistent
   session ownership, safe employee-data projection, and request safety guards.
-- `src/veltrix_assistant/retrieval/` — filtered BM25 search and context budget.
+- `src/veltrix_assistant/retrieval/` — shared metadata filtering, BM25 and
+  Chroma hybrid retrieval, persistent vector synchronization, and context
+  budget.
+- `src/veltrix_assistant/workflow.py` — conditional LangGraph routing for
+  guards, identity validation, retrieval/tool dispatch, citations, and response.
+- `src/veltrix_assistant/provenance.py` — versioned, pseudonymous request traces
+  persisted in assistant-owned SQLite tables.
 - `tests/` — focused ingestion, retrieval, and token-budget tests.
 
 ## Setup and run ingestion
@@ -57,6 +64,11 @@ answers, set `OPENAI_API_KEY` in the ignored `.env`; `LLM_PROVIDER=none` keeps
 the application offline and returns cited source excerpts. The API starts
 ingestion in the background; `GET /health` returns 503 while loading and 200
 once ready.
+Use an `OPENAI_MODEL` that is available to the configured provider. Leave
+`OPENAI_BASE_URL` blank for the official OpenAI API; set it to the provider's
+OpenAI-compatible `/v1` endpoint when using a different service. The API logs
+the provider's HTTP status and error code (when supplied) to help distinguish
+an unavailable model from a connection or authentication problem.
 `POST /search` accepts `{"query": "annual leave", "limit": 5}` and requires an
 `X-Employee-Id` header found in the configured SQLite database. It applies
 role, region, and reference-date document filters before retrieval. This
@@ -85,6 +97,14 @@ identity and access-control details, and
 [`TASK5_TECHNICAL_IMPLEMENTATION.md`](./TASK5_TECHNICAL_IMPLEMENTATION.md) for
 the chat contract, date handling, routing, and confirmation flow.
 
+Hybrid retrieval, centralized PII redaction, LangGraph orchestration, and
+provenance settings are configured through `.env`; defaults keep embeddings
+local, use Chroma under `./data/vector_db`, enable redaction, enable provenance
+schema version 2, and use LangGraph. Set `RETRIEVAL_MODE=bm25` or disable
+`LANGGRAPH_ENABLED` to use the compatibility paths. PII rules cover common
+identifiers and optional configured sensitive terms; they are not general
+name-recognition or DLP.
+
 The ingestion command reports document and chunk counts without printing
 document contents. Never put real API keys in `.env.example` or commit a local
 `.env` file.
@@ -94,15 +114,23 @@ document contents. Never put real API keys in `.env.example` or commit a local
 ```mermaid
 flowchart LR
     C[Corpus and manifest] --> I[Ingestion and OCR]
-    I --> R[Token-bounded chunks and local BM25]
+    I --> R[Token-bounded chunks]
+    R --> B[Local BM25]
+    R --> V[(Persistent Chroma)]
     U[Employee request] --> A[FastAPI identity and session checks]
-    A --> O[Conversation orchestration]
-    O --> R
-    R --> P[Role, region, date eligibility]
-    P --> L[OpenAI or extractive response]
-    O --> T[Authorized leave tools]
+    A --> G[LangGraph guard and identity nodes]
+    G --> R
+    B --> F[Role, region, date and metadata filters]
+    V --> F
+    F --> H[RRF hybrid ranking and evidence selection]
+    G --> T[Authorized leave tools]
     T --> D[(SQLite)]
-    L --> O --> U
+    H --> L[PII-redacted OpenAI or extractive response]
+    L --> CITE[Citation validation]
+    CITE --> U
+    G --> P[(Versioned provenance trace)]
+    H --> P
+    T --> P
 ```
 
 ## Docker
@@ -118,9 +146,13 @@ docker compose logs -f api
 docker compose down
 ```
 
-Compose mounts `./data` at `/app/data`, installs Tesseract for scanned PDFs,
-and reports healthy only after ingestion completes. `APP_TODAY` defaults to
-the system date. Set `LLM_PROVIDER=none` to disable external model calls.
+Compose mounts `./data` at `/app/data`, including the persistent Chroma index
+and SQLite provenance tables, installs Tesseract for scanned PDFs, and reports
+healthy only after ingestion and index synchronization complete. `APP_TODAY`
+defaults to the system date. Set `LLM_PROVIDER=none` to disable external model
+calls. OpenAI embeddings are a separate option and require
+`EMBEDDING_API_KEY` or `OPENAI_API_KEY`; the default embedding provider makes no
+external calls.
 
 ## Assumptions
 
@@ -131,20 +163,30 @@ the system date. Set `LLM_PROVIDER=none` to disable external model calls.
   date, target date, and applicable accrual evidence.
 - The application uses the OpenAI chat API when configured. An offline
   extractive mode remains available for local development and tests.
-- DSPy, LangGraph, and LlamaIndex are optional; a small corpus and security-
-  sensitive deterministic routing do not need their additional abstractions.
+- LangGraph is used for orchestration and can be disabled for the direct
+  compatibility path. DSPy and LlamaIndex are not needed by this deterministic
+  policy-and-tool workflow.
 - Retrieved chunks are evidence, not instructions. Authorization and leave
   writes remain application-controlled regardless of model output.
 
 ## Known limitations
 
 - Offline mode quotes matching evidence instead of synthesizing a
-  conversational answer. Model answers depend on local lexical BM25 retrieval.
+  conversational answer. The default local hashing vectors are lightweight
+  feature vectors rather than semantic model embeddings; use a pre-provisioned
+  sentence-transformer or OpenAI embedding provider for stronger semantic
+  matching.
 - Offline mode does not calculate future balances. Forecasts use the current
   balance, join date, and retrieved policy evidence through the configured
   LLM; calculations are only as reliable as that evidence.
 - The OpenAI request flow is covered with a mocked client; a live API request
   requires a valid `OPENAI_API_KEY`.
+- PII redaction is purpose-aware for external model/embedding inputs and
+  supports regex-detected identifiers plus configured terms. It is not a
+  general-purpose named-entity recognizer; configure sensitive terms where
+  appropriate. Provenance stores pseudonymous IDs and event metadata, not raw
+  messages, answers, or document text. Its HMAC key is persisted in the
+  assistant-owned SQLite database unless an explicit key is configured.
 - OCR depends on local Tesseract and the English language data installed in
   the runtime image.
 

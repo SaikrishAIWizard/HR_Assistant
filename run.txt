@@ -35,3 +35,13 @@ uv run pytest tests/test_leave_tools.py
 
 # Run everything
 uv run pytest
+
+# Docker: first stage corpus/, manifest.json, and veltrix.db under .\data
+docker compose build
+docker compose up -d
+docker compose ps
+Invoke-RestMethod http://localhost:8000/health
+docker compose logs -f api
+
+# Stop the Docker service when finished
+docker compose down

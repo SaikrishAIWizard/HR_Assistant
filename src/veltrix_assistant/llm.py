@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass
 from datetime import date
 from typing import Literal, Protocol
 
 from openai import OpenAI
-from openai import OpenAIError
+from openai import APIStatusError, OpenAIError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from veltrix_assistant.schemas.chat import ChatCitation
 from veltrix_assistant.schemas.documents import Citation
+from veltrix_assistant.security.privacy import redact_pii
 
 
 _LOGGER = logging.getLogger("veltrix_assistant.llm")
@@ -26,12 +26,21 @@ Use only current sources to answer what applies on the reference date. Mention
 upcoming sources separately, with their effective dates. When sources conflict,
 prefer policy, addendum, memo, handbook, or calendar over FAQ or wiki; then prefer
 a region-specific source over a global one; then prefer the later effective date.
+For personal questions, use the authenticated requester's region to apply any
+regional addendum. If the question explicitly asks for global policy, answer the
+global rule; if it names an office or region, use that scope instead.
 If those tests tie and values conflict, explain the conflict without choosing.
 When database tool facts are supplied for a future-balance question, treat the
 current balance, join date, and target date as trusted data. Calculate only from
 the supplied policy evidence, show the calculation, and do not cite tool facts.
-Do not infer facts that are not supported by the sources. Cite each source used
-with its exact doc_id and locator, and cite no unused sources.
+Answer every distinct part of the question. Include each requested figure, date,
+threshold, scope, and relevant condition or eligible use that the evidence states.
+Distinguish a carry-forward limit from an expiration deadline. If the evidence
+says there is no fixed expiration date, state that directly; do not imply that
+the days must be used by a deadline or that a particular number can be used by
+one unless the evidence establishes it. Do not infer facts that are not
+supported by the sources. Cite each source used with its exact doc_id and
+locator, and cite no unused sources.
 Return a JSON object with status ("answered" or "no_answer"), answer (string),
 and citations (array of objects with doc_id and locator). For no_answer, use an
 empty citations array and say the documents do not cover the question.
@@ -40,6 +49,17 @@ empty citations array and say the documents do not cover the question.
 
 class LLMError(RuntimeError):
     """Raised when the configured language model cannot provide a valid answer."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_code = error_code
 
 
 class GeneratedAnswer(BaseModel):
@@ -50,6 +70,7 @@ class GeneratedAnswer(BaseModel):
     status: Literal["answered", "no_answer"]
     answer: str = Field(min_length=1)
     citations: list[ChatCitation]
+    token_usage: dict[str, int] = Field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -83,21 +104,37 @@ class OpenAIChatProvider:
         api_key: str | None,
         model: str,
         timeout_seconds: float,
+        base_url: str | None = None,
+        pii_redaction_enabled: bool = True,
+        pii_redaction_mode: Literal["redact", "mask"] = "redact",
+        pii_sensitive_terms: tuple[str, ...] = (),
     ) -> None:
         if timeout_seconds <= 0:
             raise ValueError("LLM_TIMEOUT_SECONDS must be greater than zero")
         self._api_key = api_key.strip() if api_key else ""
         self._model = model
         self._timeout_seconds = timeout_seconds
+        self._pii_redaction_enabled = pii_redaction_enabled
+        self._pii_redaction_mode: Literal["redact", "mask"] = pii_redaction_mode
+        self._pii_sensitive_terms = pii_sensitive_terms
         self._client = (
             OpenAI(
                 api_key=self._api_key,
                 timeout=self._timeout_seconds,
                 max_retries=0,
+                base_url=base_url,
             )
             if self._api_key
             else None
         )
+
+    @property
+    def provider_name(self) -> str:
+        return "openai"
+
+    @property
+    def model_name(self) -> str:
+        return self._model
 
     def generate_answer(
         self,
@@ -113,21 +150,14 @@ class OpenAIChatProvider:
         if self._client is None:
             raise LLMError("The configured language model client is unavailable")
 
-        safe_question = re.sub(
-            r"\b[A-Z][0-9]{3,}\b",
-            "[employee id]",
-            question,
-            flags=re.IGNORECASE,
-        )
-        safe_question = re.sub(
-            r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b",
-            "[email]",
-            safe_question,
-        )
-        safe_question = re.sub(
-            r"(?<!\d)\+?(?:\d[\s().-]*){9,}\d(?!\d)",
-            "[phone number]",
-            safe_question,
+        safe_question = (
+            redact_pii(
+                question,
+                mode=self._pii_redaction_mode,
+                sensitive_terms=self._pii_sensitive_terms,
+            )
+            if self._pii_redaction_enabled
+            else question
         )
         payload = [
             {
@@ -137,7 +167,15 @@ class OpenAIChatProvider:
                 "regions": item.regions,
                 "effective_date": item.effective_date.isoformat(),
                 "upcoming": item.upcoming,
-                "text": item.text,
+                "text": (
+                    redact_pii(
+                        item.text,
+                        mode=self._pii_redaction_mode,
+                        sensitive_terms=self._pii_sensitive_terms,
+                    )
+                    if self._pii_redaction_enabled
+                    else item.text
+                ),
             }
             for item in evidence
         ]
@@ -174,6 +212,33 @@ class OpenAIChatProvider:
                     },
                 ],
             )
+        except APIStatusError as exc:
+            response_body = exc.body
+            provider_error = (
+                response_body.get("error")
+                if isinstance(response_body, dict)
+                else None
+            )
+            error_code = (
+                provider_error.get("code")
+                if isinstance(provider_error, dict)
+                and isinstance(provider_error.get("code"), str)
+                else None
+            )
+            if error_code is None and isinstance(provider_error, dict):
+                error_code = (
+                    provider_error.get("type")
+                    if isinstance(provider_error.get("type"), str)
+                    else None
+                )
+            safe_code = f", error_code={error_code}" if error_code else ""
+            raise LLMError(
+                f"Language model provider returned HTTP {exc.status_code}"
+                f"{safe_code} for model '{self._model}'; check "
+                "OPENAI_BASE_URL, OPENAI_MODEL, and the provider's model access.",
+                status_code=exc.status_code,
+                error_code=error_code,
+            ) from exc
         except OpenAIError as exc:
             raise LLMError("The configured language model request failed") from exc
 
@@ -199,7 +264,21 @@ class OpenAIChatProvider:
             raise LLMError("The configured language model omitted required citations")
         if answer.status == "no_answer" and answer.citations:
             raise LLMError("A no-answer response cannot include citations")
-        return answer
+        usage = getattr(completion, "usage", None)
+        token_usage = (
+            {
+                name: value
+                for name, value in {
+                    "prompt_tokens": usage.prompt_tokens,
+                    "completion_tokens": usage.completion_tokens,
+                    "total_tokens": usage.total_tokens,
+                }.items()
+                if isinstance(value, int)
+            }
+            if usage is not None
+            else {}
+        )
+        return answer.model_copy(update={"token_usage": token_usage})
 
 
 def create_llm_provider(
@@ -208,6 +287,10 @@ def create_llm_provider(
     api_key: str | None,
     model: str,
     timeout_seconds: float,
+    base_url: str | None = None,
+    pii_redaction_enabled: bool = True,
+    pii_redaction_mode: Literal["redact", "mask"] = "redact",
+    pii_sensitive_terms: tuple[str, ...] = (),
 ) -> LLMProvider | None:
     """Create the configured provider, or disable generation for offline tests."""
     normalized = provider.strip().casefold()
@@ -218,5 +301,9 @@ def create_llm_provider(
             api_key=api_key,
             model=model,
             timeout_seconds=timeout_seconds,
+            base_url=base_url,
+            pii_redaction_enabled=pii_redaction_enabled,
+            pii_redaction_mode=pii_redaction_mode,
+            pii_sensitive_terms=pii_sensitive_terms,
         )
     raise ValueError("LLM_PROVIDER must be 'openai' or 'none'")

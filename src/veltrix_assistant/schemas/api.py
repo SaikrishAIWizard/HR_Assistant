@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from veltrix_assistant.schemas.chat import SessionId
+from veltrix_assistant.schemas.documents import DocumentType
 
 
 class SearchRequest(BaseModel):
@@ -18,6 +20,10 @@ class SearchRequest(BaseModel):
     limit: int = Field(default=5, ge=1, le=20)
     reference_date: date | None = None
     session_id: SessionId | None = None
+    doc_type: DocumentType | None = None
+    doc_ids: tuple[str, ...] | None = Field(default=None, max_length=50)
+    policy_scope: Literal["GLOBAL", "REGIONAL"] | None = None
+    authority: Literal["authoritative", "reference"] | None = None
 
 
 class SearchResult(BaseModel):

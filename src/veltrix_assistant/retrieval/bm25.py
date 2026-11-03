@@ -6,7 +6,10 @@ import math
 import re
 from collections import Counter
 from collections.abc import Callable, Sequence
+from collections.abc import Mapping
 
+from veltrix_assistant.retrieval.filters import metadata_matches
+from veltrix_assistant.policy.applicability import get_superseded_document_ids
 from veltrix_assistant.schemas.documents import (
     DocumentChunk,
     DocumentMetadata,
@@ -45,6 +48,7 @@ class BM25Retriever:
         *,
         is_allowed: Callable[[DocumentMetadata], bool],
         limit: int = 5,
+        metadata_filter: Mapping[str, object] | None = None,
     ) -> list[RetrievedChunk]:
         """Return ranked matches only from documents approved by ``is_allowed``."""
         if limit < 1:
@@ -54,7 +58,22 @@ class BM25Retriever:
             return []
 
         visible_chunks = [
-            chunk for chunk in self._chunks if is_allowed(chunk.document)
+            chunk
+            for chunk in self._chunks
+            if is_allowed(chunk.document)
+            and metadata_matches(chunk.document, metadata_filter)
+        ]
+        visible_documents = tuple(
+            {
+                chunk.document.doc_id: chunk.document
+                for chunk in visible_chunks
+            }.values()
+        )
+        superseded_ids = get_superseded_document_ids(visible_documents)
+        visible_chunks = [
+            chunk
+            for chunk in visible_chunks
+            if chunk.document.doc_id not in superseded_ids
         ]
         if not visible_chunks:
             return []

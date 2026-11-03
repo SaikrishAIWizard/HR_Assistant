@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import uuid
 from calendar import month_abbr, month_name, monthrange
@@ -16,7 +17,9 @@ from veltrix_assistant.policy.applicability import (
 )
 from veltrix_assistant.retrieval.bm25 import BM25Retriever
 from veltrix_assistant.retrieval.context import build_corpus_context
+from veltrix_assistant.retrieval.hybrid import HybridRetriever
 from veltrix_assistant.llm import EvidenceBlock, LLMProvider
+from veltrix_assistant.provenance import ProvenanceTrace
 from veltrix_assistant.schemas.chat import (
     ChatRoute,
     ChatCitation,
@@ -24,12 +27,16 @@ from veltrix_assistant.schemas.chat import (
     ChatToolCall,
     PendingAction,
 )
-from veltrix_assistant.schemas.documents import RetrievedChunk
+from veltrix_assistant.schemas.documents import DocumentMetadata, RetrievedChunk
 from veltrix_assistant.schemas.policy import DocumentAudience
-from veltrix_assistant.schemas.security import EmployeeIdentity
+from veltrix_assistant.schemas.security import (
+    EmployeeIdentity,
+    RequestSafetyDecision,
+)
 from veltrix_assistant.schemas.tools import LeaveToolResult
 from veltrix_assistant.security.guards import assess_user_message
 from veltrix_assistant.security.identity import SessionBindingStore
+from veltrix_assistant.security.privacy import redact_pii
 from veltrix_assistant.tools.leave import LeaveTools
 
 
@@ -107,8 +114,14 @@ _HR_SCOPE_TERMS = (
 _POLICY_CUES = (
     "policy",
     "carry forward",
+    "carried forward",
     "carry over",
+    "carried over",
     "accrual",
+    "addendum",
+    "cap",
+    "limit",
+    "maximum",
     "how do i",
     "what are the rules",
     "what is the rule",
@@ -154,7 +167,45 @@ def _tool_call(result: LeaveToolResult) -> ChatToolCall:
     return ChatToolCall(name=result.name, args=result.args, status=status)
 
 
-def _tool_response(result: LeaveToolResult) -> ChatResponse:
+def _retrieval_provenance_item(
+    match: RetrievedChunk,
+    *,
+    decision: str,
+) -> dict[str, object]:
+    return {
+        "doc_id": match.chunk.document.doc_id,
+        "locator": match.chunk.locator,
+        "chunk_id": match.chunk.chunk_id,
+        "doc_type": match.chunk.document.doc_type,
+        "effective_date": match.chunk.document.effective_date.isoformat(),
+        "regions": list(match.chunk.document.regions),
+        "access_level": match.chunk.document.access_level,
+        "retrieval_method": match.retrieval_method,
+        "rank": match.bm25_rank or match.vector_rank,
+        "bm25_rank": match.bm25_rank,
+        "vector_rank": match.vector_rank,
+        "bm25_score": match.bm25_score,
+        "vector_score": match.vector_score,
+        "score": match.score,
+        "decision": decision,
+    }
+
+
+def _tool_response(
+    result: LeaveToolResult,
+    *,
+    trace: ProvenanceTrace | None = None,
+) -> ChatResponse:
+    if trace is not None:
+        trace.record(
+            "leave_tool_node",
+            "executed",
+            {
+                "tool_name": result.name,
+                "outcome": result.status,
+                "error_code": "tool_error" if result.status == "error" else "none",
+            },
+        )
     if result.status == "error":
         answer = result.error or "The requested leave action could not be completed."
     else:
@@ -405,11 +456,19 @@ def _request_status(message: str) -> str | None:
 
 def _tool_intent(message: str) -> str | None:
     lowered = re.sub(r"[-_]", " ", message.casefold())
+    policy_question = any(cue in lowered for cue in _POLICY_CUES)
+    explicitly_targets_employee = bool(
+        _EMPLOYEE_ID_PATTERN.search(message)
+        or re.search(r"\b(my|me|mine|own|i)\b", message, re.IGNORECASE)
+    )
     if _is_future_balance_question(message):
         return "get_leave_balance"
     if re.search(r"\b(cancel|withdraw)\b.{0,50}\b(leave|request)\b", lowered):
         return "cancel_leave"
-    if re.search(r"\b(team leave|team members off|who is off)\b", lowered):
+    if re.search(r"\b(team leave|team members off|who is off)\b", lowered) or (
+        "team" in lowered
+        and re.search(r"\bwho\b.{0,40}\b(?:on leave|off)\b", lowered)
+    ):
         return "get_team_leave"
     if re.search(
         r"\b(apply|request|book|take|want|need)\b.{0,50}\b(annual|sick)?\s*leave\b",
@@ -420,6 +479,7 @@ def _tool_intent(message: str) -> str | None:
         re.search(r"\b(balance|remaining|left)\b", lowered)
         and re.search(r"\b(leave|annual|sick|days)\b", lowered)
         and ("carry forward" not in lowered or "balance" in lowered)
+        and (not policy_question or explicitly_targets_employee)
     ):
         return "get_leave_balance"
     if re.search(r"\b(list|show|check|view)\b.{0,40}\b(my )?leave requests?\b", lowered):
@@ -434,7 +494,22 @@ def _needs_retrieval(message: str, intent: str | None) -> bool:
     policy_question = any(cue in lowered for cue in _POLICY_CUES)
     if intent is not None:
         return policy_question or _is_future_balance_question(message)
-    return any(term in lowered for term in _HR_SCOPE_TERMS)
+    return policy_question or any(term in lowered for term in _HR_SCOPE_TERMS)
+
+
+def _retrieval_question(message: str, intent: str | None) -> str:
+    """Keep deterministic tool sub-questions out of model answer generation."""
+    if intent is None:
+        return message
+    clauses = re.split(r"\s+\b(?:and|also)\b\s+|[;?]\s*", message, flags=re.IGNORECASE)
+    policy_clauses = [
+        clause.strip(" ,.")
+        for clause in clauses
+        if clause.strip()
+        and _tool_intent(clause) is None
+        and _needs_retrieval(clause, None)
+    ]
+    return " ".join(policy_clauses) if policy_clauses else message
 
 
 def _has_relevant_query_term(message: str, chunk_text: str) -> bool:
@@ -590,6 +665,7 @@ def _execute_pending(
     pending: PendingAction,
     tools: LeaveTools,
     identity: EmployeeIdentity,
+    trace: ProvenanceTrace | None = None,
 ) -> ChatResponse:
     if pending.employee_id != identity.employee_id:
         raise ValueError("Pending action identity does not match the authenticated employee.")
@@ -606,7 +682,16 @@ def _execute_pending(
         if set(pending.args) != {"request_id"}:
             raise ValueError("Stored cancellation proposal has invalid arguments.")
         result = tools.cancel_leave(request_id=str(pending.args["request_id"]))
-    return _tool_response(result)
+    if trace is not None:
+        trace.record(
+            "confirmation_node",
+            "confirmed_write_executed",
+            {
+                "tool_name": result.name,
+                "outcome": result.status,
+            },
+        )
+    return _tool_response(result, trace=trace)
 
 
 def _proposal_response(
@@ -617,6 +702,7 @@ def _proposal_response(
     name: Literal["apply_leave", "cancel_leave"],
     args: dict[str, object],
     summary: str,
+    trace: ProvenanceTrace | None = None,
 ) -> ChatResponse:
     pending = PendingAction(
         employee_id=identity.employee_id,
@@ -629,6 +715,12 @@ def _proposal_response(
         identity.employee_id,
         pending.model_dump_json(),
     )
+    if trace is not None:
+        trace.record(
+            "confirmation_node",
+            "write_proposed",
+            {"tool_name": name, "outcome": "pending_confirmation"},
+        )
     call = ChatToolCall(
         name=name,
         args=args,
@@ -650,25 +742,75 @@ def _format_retrieval_answer(
     reference_date: date,
     llm_provider: LLMProvider | None,
     tool_facts: dict[str, object] | None = None,
+    trace: ProvenanceTrace | None = None,
+    pii_redaction_enabled: bool = True,
+    pii_redaction_mode: Literal["redact", "mask"] = "redact",
+    pii_sensitive_terms: tuple[str, ...] = (),
 ) -> tuple[str, list[ChatCitation], bool]:
     combined_matches = (*matches, *upcoming_matches)
-    context = build_corpus_context([match.chunk for match in combined_matches])
-    metadata_by_block = {
-        (
-            match.chunk.document.doc_id,
-            match.chunk.locator,
-            match.chunk.text,
-        ): match.chunk.document
-        for match in combined_matches
-    }
+    rendered_chunks = []
+    document_by_block: dict[tuple[str, str, str], DocumentMetadata] = {}
+    chunk_id_by_block: dict[tuple[str, str, str], str] = {}
+    upcoming_doc_ids = {match.chunk.document.doc_id for match in upcoming_matches}
+    for match in combined_matches:
+        original_chunk = match.chunk
+        text = original_chunk.text
+        if llm_provider is not None and pii_redaction_enabled:
+            text = redact_pii(
+                text,
+                mode=pii_redaction_mode,
+                sensitive_terms=pii_sensitive_terms,
+            )
+        rendered_chunk = original_chunk.model_copy(update={"text": text})
+        rendered_chunks.append(rendered_chunk)
+        key = (original_chunk.document.doc_id, original_chunk.locator, text)
+        document_by_block[key] = original_chunk.document
+        chunk_id_by_block[key] = original_chunk.chunk_id
+    context = build_corpus_context(rendered_chunks)
+    metadata_by_block = document_by_block
     upcoming_keys = {
-        (
-            match.chunk.document.doc_id,
-            match.chunk.locator,
-            match.chunk.text,
-        )
-        for match in upcoming_matches
+        key
+        for key in document_by_block
+        if key[0] in upcoming_doc_ids
     }
+
+    if trace is not None:
+        trace.record(
+            "policy_applicability_node",
+            "evidence_selected",
+            {
+                "citations": [
+                    {
+                        "doc_id": citation.doc_id,
+                        "locator": citation.locator,
+                        "effective_date": metadata_by_block[
+                            (citation.doc_id, citation.locator, text)
+                        ].effective_date.isoformat(),
+                        "doc_type": metadata_by_block[
+                            (citation.doc_id, citation.locator, text)
+                        ].doc_type,
+                    }
+                    for citation, text in context.blocks
+                ],
+                "chunks": [
+                    {
+                        "doc_id": citation.doc_id,
+                        "locator": citation.locator,
+                        "effective_date": metadata_by_block[
+                            (citation.doc_id, citation.locator, text)
+                        ].effective_date.isoformat(),
+                        "chunk_id": chunk_id_by_block[
+                            (citation.doc_id, citation.locator, text)
+                        ],
+                        "content_hash": hashlib.sha256(
+                            text.encode("utf-8")
+                        ).hexdigest(),
+                    }
+                    for citation, text in context.blocks
+                ],
+                "corpus_tokens": context.corpus_tokens,
+            },
+        )
 
     if llm_provider is not None:
         evidence = tuple(
@@ -695,6 +837,17 @@ def _format_retrieval_answer(
             corpus_tokens=context.corpus_tokens,
             tool_facts=tool_facts,
         )
+        if trace is not None:
+            trace.record(
+                "answer_generation_node",
+                "llm_completed",
+                {
+                    "provider": getattr(llm_provider, "provider_name", "configured"),
+                    "model": getattr(llm_provider, "model_name", "configured"),
+                    "corpus_tokens": context.corpus_tokens,
+                    "token_usage": generated.token_usage or {},
+                },
+            )
         citations = [
             ChatCitation(doc_id=item.doc_id, locator=item.locator)
             for item in generated.citations
@@ -748,11 +901,16 @@ def respond_to_message(
     message: str,
     session_id: str,
     identity: EmployeeIdentity,
-    retriever: BM25Retriever,
+    retriever: BM25Retriever | HybridRetriever,
     tools: LeaveTools,
     session_store: SessionBindingStore,
     today: date,
     llm_provider: LLMProvider | None = None,
+    safety_decision: RequestSafetyDecision | None = None,
+    trace: ProvenanceTrace | None = None,
+    pii_redaction_enabled: bool = True,
+    pii_redaction_mode: Literal["redact", "mask"] = "redact",
+    pii_sensitive_terms: tuple[str, ...] = (),
 ) -> ChatResponse:
     """Route one chat message and enforce the single pending-confirmation rule."""
     stored_pending = session_store.consume_pending(session_id, identity.employee_id)
@@ -764,10 +922,22 @@ def respond_to_message(
             raise ValueError("Stored pending action is invalid.") from exc
         if pending.employee_id != identity.employee_id:
             raise ValueError("Stored pending action belongs to a different employee.")
+    if trace is not None:
+        trace.record(
+            "confirmation_node",
+            "pending_action_checked",
+            {"outcome": "pending" if pending is not None else "none"},
+        )
 
     if pending is not None and _is_confirmation(message):
-        return _execute_pending(pending, tools, identity)
+        return _execute_pending(pending, tools, identity, trace=trace)
     if pending is not None and _is_cancellation(message):
+        if trace is not None:
+            trace.record(
+                "confirmation_node",
+                "cancelled",
+                {"tool_name": pending.name, "outcome": "cancelled"},
+            )
         call = ChatToolCall(
             name=pending.name,
             args=pending.args,
@@ -778,8 +948,22 @@ def respond_to_message(
             "tool",
             tool_calls=[call],
         )
+    if pending is not None and trace is not None:
+        trace.record(
+            "confirmation_node",
+            "pending_action_discarded",
+            {"tool_name": pending.name, "outcome": "new_message"},
+        )
 
     safety = assess_user_message(message)
+    if safety_decision is not None:
+        safety = safety_decision
+    elif trace is not None:
+        trace.record(
+            "request_guard_node",
+            "evaluated",
+            {"decision": safety.route, "reason": safety.reason or "none"},
+        )
     if safety.route == "refuse":
         return _response(
             safety.message or "I can't help with that request.",
@@ -857,6 +1041,15 @@ def respond_to_message(
                 replacement_args = {"request_id": request_id_match.group()}
 
     needs_retrieval = _needs_retrieval(message, intent)
+    if trace is not None and safety_decision is None:
+        trace.record(
+            "intent_router_node",
+            "routed",
+            {
+                "intent": intent or "none",
+                "needs_retrieval": needs_retrieval,
+            },
+        )
     if intent is None and not needs_retrieval:
         return _response(
             "I can help with Veltrix leave, holiday, and workplace policies. "
@@ -866,7 +1059,7 @@ def respond_to_message(
 
     tool_result: LeaveToolResult | None = None
     tool_call: ChatToolCall | None = None
-    projection_tool_facts: dict[str, object] | None = None
+    llm_tool_facts: dict[str, object] | None = None
     if intent is not None:
         if intent == "get_team_leave" and identity.role != "manager":
             return _response(
@@ -899,7 +1092,7 @@ def respond_to_message(
                 if projection_query:
                     tool_result = tools.get_annual_balance_projection_inputs(target_id)
                     if tool_result.status == "error":
-                        return _tool_response(tool_result)
+                        return _tool_response(tool_result, trace=trace)
                     data = tool_result.data or {}
                     balances = data.get("balances")
                     join_date = data.get("join_date")
@@ -910,7 +1103,7 @@ def respond_to_message(
                         or projection_target is None
                     ):
                         raise ValueError("Annual leave projection inputs are invalid.")
-                    projection_tool_facts = {
+                    llm_tool_facts = {
                         "current_balance_days": float(balances["annual"]),
                         "join_date": join_date,
                         "target_date": projection_target.isoformat(),
@@ -941,7 +1134,7 @@ def respond_to_message(
                 end_date=str(args["end_date"]),
             )
             if preview.status == "error":
-                return _tool_response(preview)
+                return _tool_response(preview, trace=trace)
             data = preview.data or {}
             summary = (
                 f"Request {data.get('working_days')} working days of "
@@ -955,13 +1148,14 @@ def respond_to_message(
                 name="apply_leave",
                 args=args,
                 summary=summary,
+                trace=trace,
             )
         else:
             preview = tools.preview_cancel_leave(str(args["request_id"]))
             if preview.status == "error":
                 if preview.error == "I can't share information about that employee.":
                     return _response(preview.error, "refuse")
-                return _tool_response(preview)
+                return _tool_response(preview, trace=trace)
             data = preview.data or {}
             summary = (
                 f"Cancel {data.get('leave_type')} leave request "
@@ -975,6 +1169,7 @@ def respond_to_message(
                 name="cancel_leave",
                 args=args,
                 summary=summary,
+                trace=trace,
             )
         assert tool_result is not None
         tool_call = _tool_call(tool_result)
@@ -1001,7 +1196,18 @@ def respond_to_message(
             if intent is None
             else today
         )
-        matches = retriever.search(
+        if trace is not None:
+            trace.record(
+                "policy_applicability_node",
+                "authorization_applied",
+                {
+                    "region": identity.region,
+                    "role": identity.role,
+                    "reference_date": reference_date.isoformat(),
+                    "before_retrieval": True,
+                },
+            )
+        raw_matches = retriever.search(
             retrieval_query,
             is_allowed=lambda metadata: is_document_applicable(
                 metadata,
@@ -1010,12 +1216,7 @@ def respond_to_message(
             ),
             limit=5,
         )
-        matches = [
-            match
-            for match in matches
-            if _has_relevant_query_term(normalized_query, match.chunk.text)
-        ]
-        upcoming_candidates = retriever.search(
+        raw_upcoming_candidates = retriever.search(
             retrieval_query,
             is_allowed=lambda metadata: (
                 is_document_readable(metadata, audience)
@@ -1023,9 +1224,14 @@ def respond_to_message(
             ),
             limit=10,
         )
+        matches = [
+            match
+            for match in raw_matches
+            if _has_relevant_query_term(normalized_query, match.chunk.text)
+        ]
         upcoming_candidates = [
             match
-            for match in upcoming_candidates
+            for match in raw_upcoming_candidates
             if _has_relevant_query_term(normalized_query, match.chunk.text)
         ]
         relevant_documents = tuple(
@@ -1047,14 +1253,63 @@ def respond_to_message(
             for match in upcoming_candidates
             if match.chunk.document.doc_id in upcoming_ids
         ][:5]
+        if trace is not None:
+            current_relevant_ids = {match.chunk.chunk_id for match in matches}
+            upcoming_relevant_ids = {
+                match.chunk.chunk_id for match in upcoming_candidates
+            }
+            trace.record(
+                (
+                    "hybrid_retrieval_node"
+                    if any(
+                        match.retrieval_method in {"vector", "hybrid"}
+                        for match in (*raw_matches, *raw_upcoming_candidates)
+                    )
+                    else "policy_retrieval_node"
+                ),
+                "ranked",
+                {
+                    "current_candidates": [
+                        _retrieval_provenance_item(
+                            match,
+                            decision=(
+                                "relevant"
+                                if match.chunk.chunk_id in current_relevant_ids
+                                else "not_query_relevant"
+                            ),
+                        )
+                        for match in raw_matches
+                    ],
+                    "upcoming_candidates": [
+                        _retrieval_provenance_item(
+                            match,
+                            decision=(
+                                "relevant"
+                                if match.chunk.chunk_id in upcoming_relevant_ids
+                                else "not_query_relevant"
+                            ),
+                        )
+                        for match in raw_upcoming_candidates
+                    ],
+                    "selected_upcoming_doc_ids": sorted(upcoming_ids),
+                },
+            )
         if matches:
+            retrieval_question = _retrieval_question(message, intent)
             retrieval_answer, retrieval_citations, answered = _format_retrieval_answer(
                 matches,
                 upcoming_matches,
-                question=message,
+                question=(
+                    f"Authenticated requester region: {identity.region}.\n"
+                    f"Question: {retrieval_question}"
+                ),
                 reference_date=reference_date,
                 llm_provider=llm_provider,
-                tool_facts=projection_tool_facts,
+                tool_facts=llm_tool_facts,
+                trace=trace,
+                pii_redaction_enabled=pii_redaction_enabled,
+                pii_redaction_mode=pii_redaction_mode,
+                pii_sensitive_terms=pii_sensitive_terms,
             )
             if answered:
                 answer_parts.append(retrieval_answer)

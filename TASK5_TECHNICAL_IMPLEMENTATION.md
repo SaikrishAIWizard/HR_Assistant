@@ -5,18 +5,21 @@
 `POST /chat` implements the assessment's request/response contract and routes
 each message to exactly one of `rag`, `tool`, `hybrid`, `clarify`, `no_answer`,
 or `refuse`. The route logic is deterministic: it uses the trusted employee
-identity, the Task 4 safety guard, the access-filtered BM25 retriever, and the
-existing leave tools. Write actions are validated without mutation, persisted
-as one pending proposal per session, and executed only after a clear
-confirmation in that same employee-owned session.
+identity, the Task 4 safety guard, authorization-first hybrid retrieval, and
+the existing leave tools. A conditional LangGraph workflow validates identity,
+routes intent, dispatches retrieval/tools, validates citations, and records
+response decisions. Write actions are validated without mutation, persisted as
+one pending proposal per session, and executed only after a clear confirmation
+in that same employee-owned session.
 
 When `LLM_PROVIDER=openai`, RAG uses the OpenAI chat API with temperature 0.
-Only role/region/date-filtered evidence is passed; the system prompt contains no
-corpus facts, and every call is limited to 3,000 corpus-text tokens and logged.
-The response schema validates citation IDs and locators against the supplied
-evidence. The optional `LLM_PROVIDER=none` mode returns labeled source excerpts
-without calling an external model. Leave tools and application code remain the
-authority for permissions and writes in either mode.
+Only role/region/date-filtered evidence is passed after configured PII
+redaction; the system prompt contains no corpus facts, and every call is
+limited to 3,000 corpus-text tokens and logged. The response schema validates
+citation IDs and locators against the supplied evidence. The optional
+`LLM_PROVIDER=none` mode returns labeled source excerpts without calling an
+external model. Leave tools and application code remain the authority for
+permissions and writes in either mode.
 
 ## API contract
 
@@ -94,6 +97,12 @@ contract's fields: `name`, `args`, and `status`.
   words such as “leave” as evidence for unrelated specifics. This is a
   deterministic fallback, not a semantic model; it can conservatively return
   `no_answer` when wording differs from the corpus.
+- `HybridRetriever` applies role, region, effective-date, and optional metadata
+  filters before querying BM25 and Chroma. It merges stable chunk IDs with
+  Reciprocal Rank Fusion and preserves the component ranks/scores. The default
+  local feature-hashing embedding is offline and lightweight, not semantic;
+  stronger vector semantics require a pre-provisioned sentence-transformer or
+  an external embedding provider.
 - Balance, request-list, and team-leave questions call the existing read tools.
   Employee targets are authorized before a visible tool call; the tool checks
   access again while reading. Cross-employee denials use the same fixed
@@ -141,6 +150,34 @@ the authenticated owner.
   existing validation behavior.
 - Keeps `/search` as a retrieval diagnostic endpoint and `GET /health` as the
   readiness check.
+- Initializes the retrieval index, `ChatWorkflow`, and optional provenance
+  store at startup. `LANGGRAPH_ENABLED=false` retains a direct conversation
+  compatibility path.
+- Persists provenance V2 events on successful and failed chat turns. Traces
+  include safe node decisions, retrieval ranks, selected citation identifiers,
+  tool outcomes, citation validation, and available token counts; employee and
+  session references are pseudonymized. Raw message, answer, and document text
+  are excluded. Audit-store failures return 503.
+
+### `src/veltrix_assistant/workflow.py`
+
+- Defines the LangGraph request guard, identity revalidation, intent routing,
+  policy/hybrid retrieval, leave-tool, clarification, confirmation, conversation,
+  citation-validation, and response nodes.
+- Routes guard refusals directly to response creation. Other requests must
+  pass database identity revalidation before intent routing. Response
+  citations are checked against evidence selected for that request.
+- Records node outcomes through `ProvenanceTrace`; errors are re-raised and
+  logged with error codes rather than converted to success-shaped responses.
+
+### `src/veltrix_assistant/provenance.py`
+
+- Persists versioned V2 rows and ordered events in assistant-owned SQLite
+  tables. HMAC-derived employee/session references use a configured key or a
+  random key kept in the same assistant-owned database.
+- Rejects sensitive raw-content event keys. Events contain metadata and
+  identifiers rather than user messages, model answers, retrieved text, or
+  tool outputs. This is an application audit trail, not tamper-proof storage.
 
 ## Route selection and write confirmation
 
@@ -159,9 +196,10 @@ the authenticated owner.
    create pending state. Otherwise persist the action and ask for confirmation.
 7. On confirmation, re-run the tool's validations and execute its transaction.
    At most one proposal exists per session.
-8. For document questions, filter eligible documents before BM25 ranking. If
-   no relevant eligible evidence is found, return `no_answer` rather than
-   guessing.
+8. For document questions, filter eligible documents before BM25/vector
+   ranking, fuse candidates, and select evidence within the corpus-token
+   budget. If no relevant eligible evidence is found, return `no_answer`
+   rather than guessing.
 
 The implementation recognizes ISO dates and common month-name dates, with an
 omitted year interpreted as 2026. “Next week” is Monday through Friday of the
@@ -183,5 +221,8 @@ uv run pytest -q
 invalid-body and identity HTTP codes, authorized read tools, hybrid answers,
 clarification, write prevalidation, proposal immutability, confirmation,
 cancellation, changed proposals, session ownership, and pending-action
-discard behavior. `tests/test_leave_tools.py` continues to cover the
+discard behavior, LangGraph execution, and privacy-safe provenance persistence.
+`tests/test_hybrid_provenance.py` covers incremental vector synchronization,
+authorization-first fusion, pseudonymization, and forbidden provenance fields.
+`tests/test_leave_tools.py` continues to cover the
 transactional and permission rules enforced again at execution time.

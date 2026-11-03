@@ -76,6 +76,22 @@ def get_applicable_documents(
     )
 
 
+def get_superseded_document_ids(
+    documents: tuple[DocumentMetadata, ...] | list[DocumentMetadata],
+) -> frozenset[str]:
+    """Return visible document IDs explicitly superseded by newer documents."""
+    documents_by_id = {document.doc_id: document for document in documents}
+    superseded_ids = {
+        superseded_id
+        for document in documents
+        for superseded_id in document.supersedes_doc_ids
+        if superseded_id in documents_by_id
+        and superseded_id != document.doc_id
+        and documents_by_id[superseded_id].effective_date < document.effective_date
+    }
+    return frozenset(superseded_ids)
+
+
 def document_precedence_key(
     document: DocumentMetadata,
     audience: DocumentAudience,

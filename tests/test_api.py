@@ -9,6 +9,7 @@ from veltrix_assistant.api import create_app
 from veltrix_assistant.llm import (
     EvidenceBlock,
     GeneratedAnswer,
+    LLMError,
     OpenAIChatProvider,
 )
 from veltrix_assistant.schemas.chat import ChatCitation
@@ -453,6 +454,53 @@ def test_chat_returns_exact_rag_no_answer_and_refusal_routes(tmp_path, monkeypat
     assert off_topic.json()["route"] == "refuse"
 
 
+def test_chat_runs_workflow_and_persists_privacy_safe_provenance(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("APP_TODAY", "2026-11-02")
+    monkeypatch.setenv("PROVENANCE_ENABLED", "true")
+    corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
+    app = create_app(
+        corpus_dir=corpus_dir,
+        manifest_path=manifest_path,
+        database_path=database_path,
+    )
+
+    with TestClient(app) as client:
+        _wait_until_ready(client)
+        response = _chat(
+            client,
+            "What does annual leave policy say? Contact vijay@example.test.",
+            "provenance-session",
+        )
+
+    assert response.status_code == 200
+    with sqlite3.connect(database_path) as connection:
+        row = connection.execute(
+            """
+            SELECT employee_ref, conversation_ref, citation_validation,
+                   response_route, response_status, events_json
+            FROM assistant_provenance_v2
+            """
+        ).fetchone()
+
+    assert row is not None
+    employee_ref, conversation_ref, citation_validation, route, status, events = row
+    event_data = json.loads(events)
+    event_nodes = {item["node"] for item in event_data}
+    serialized = json.dumps(event_data)
+    assert employee_ref != "E1001"
+    assert conversation_ref != "provenance-session"
+    assert citation_validation == "passed"
+    assert route == "rag"
+    assert status == "success"
+    assert {"request_guard_node", "identity_validation_node", "citation_validation_node"} <= event_nodes
+    assert "vijay@example.test" not in serialized
+    assert "provenance-session" not in serialized
+    assert "E1001" not in serialized
+
+
 def test_chat_uses_historical_reference_date_and_mentions_upcoming_change(
     tmp_path,
     monkeypatch,
@@ -543,6 +591,102 @@ def test_configured_llm_receives_only_authorized_evidence(
     assert corpus_tokens <= 3000
     assert evidence
     assert all(item.citation.doc_id != "HR" for item in evidence)
+
+
+def test_hybrid_balance_question_supplies_authorized_tool_facts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("APP_TODAY", "2026-11-02")
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
+    observed_facts: list[dict[str, object] | None] = []
+
+    def fake_generate(
+        self: OpenAIChatProvider,
+        question: str,
+        evidence: tuple[EvidenceBlock, ...],
+        *,
+        reference_date: date,
+        corpus_tokens: int,
+        tool_facts: dict[str, object] | None = None,
+    ) -> GeneratedAnswer:
+        del reference_date, corpus_tokens
+        assert isinstance(self, OpenAIChatProvider)
+        assert "carried-forward" in question
+        assert "my annual leave balance" not in question
+        assert tool_facts is None
+        observed_facts.append(tool_facts)
+        source = next(item for item in evidence if not item.upcoming)
+        return GeneratedAnswer(
+            status="answered",
+            answer="The applicable carry-forward policy is described above.",
+            citations=[
+                ChatCitation(
+                    doc_id=source.citation.doc_id,
+                    locator=source.citation.locator,
+                )
+            ],
+        )
+
+    monkeypatch.setattr(OpenAIChatProvider, "generate_answer", fake_generate)
+    app = create_app(
+        corpus_dir=corpus_dir,
+        manifest_path=manifest_path,
+        database_path=database_path,
+    )
+
+    with TestClient(app) as client:
+        _wait_until_ready(client)
+        response = _chat(
+            client,
+            "What is my annual leave balance, and how many carried-forward days may I use by the deadline?",
+            "hybrid-balance-policy",
+        )
+
+    body = response.json()
+    assert response.status_code == 200
+    assert body["route"] == "hybrid"
+    assert body["tool_calls"][0]["name"] == "get_leave_balance"
+    assert body["citations"]
+    assert observed_facts == [None]
+
+
+def test_chat_explains_exhausted_model_quota(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("APP_TODAY", "2026-11-02")
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
+
+    def fail_generation(*args, **kwargs):
+        del args, kwargs
+        raise LLMError(
+            "Language model provider returned HTTP 429",
+            status_code=429,
+            error_code="credit_balance_exhausted",
+        )
+
+    monkeypatch.setattr(OpenAIChatProvider, "generate_answer", fail_generation)
+    app = create_app(
+        corpus_dir=corpus_dir,
+        manifest_path=manifest_path,
+        database_path=database_path,
+    )
+
+    with TestClient(app) as client:
+        _wait_until_ready(client)
+        response = _chat(
+            client,
+            "What does the annual leave policy say?",
+            "quota-exhausted",
+        )
+
+    assert response.status_code == 502
+    assert "no API credits or quota" in response.json()["detail"]
 
 
 def test_future_balance_uses_current_balance_join_date_and_policy_evidence(
@@ -737,6 +881,7 @@ def test_chat_requires_identity_and_maps_invalid_body_to_400(tmp_path) -> None:
 
 def test_chat_read_tool_and_authorization_routes(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("APP_TODAY", "2026-11-02")
+    monkeypatch.setenv("LLM_PROVIDER", "none")
     corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
     app = create_app(
         corpus_dir=corpus_dir,
@@ -762,13 +907,18 @@ def test_chat_read_tool_and_authorization_routes(tmp_path, monkeypatch) -> None:
         )
         manager_team = _chat(
             client,
-            "Show team leave next week",
+            "Who on my team is on leave next week?",
             "team-1",
             employee_id="M1001",
         )
+        regional_policy_with_balance_term = _chat(
+            client,
+            "What is the India leave addendum carry-forward limit and annual balance cap?",
+            "regional-policy-balance",
+        )
         hybrid = _chat(
             client,
-            "What does the carry forward policy say and what is my annual leave balance?",
+            "What is my annual leave balance, and how many carried-forward days may I use by the deadline?",
             "hybrid-1",
         )
 
@@ -789,6 +939,8 @@ def test_chat_read_tool_and_authorization_routes(tmp_path, monkeypatch) -> None:
     assert forbidden.json()["tool_calls"] == []
     assert manager_team.json()["route"] == "tool"
     assert manager_team.json()["tool_calls"][0]["name"] == "get_team_leave"
+    assert regional_policy_with_balance_term.json()["route"] != "clarify"
+    assert regional_policy_with_balance_term.json()["tool_calls"] == []
     hybrid_body = hybrid.json()
     assert hybrid_body["route"] == "hybrid"
     assert hybrid_body["citations"]

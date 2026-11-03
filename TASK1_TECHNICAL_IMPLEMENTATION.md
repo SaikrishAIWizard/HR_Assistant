@@ -44,9 +44,10 @@ behavior is described in
 This module defines the validated data passed between ingestion and retrieval:
 
 - `DocumentMetadata` represents a manifest entry: `doc_id`, file, title,
-  document type, regions, effective date, and access level. Pydantic rejects
-  unknown fields, restricts the allowed document/access types, and prevents
-  blank identifiers and titles.
+  document type, regions, effective date, access level, and optional
+  `supersedes_doc_ids` for explicit version lineage. Pydantic rejects unknown
+  fields, restricts the allowed document/access types, and prevents blank
+  identifiers and titles.
 - `ExtractedSection` holds extracted text with a page number and citation
   locator.
 - `DocumentChunk` holds one piece of text with its stable chunk ID and the

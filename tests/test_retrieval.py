@@ -1,4 +1,5 @@
 import logging
+from datetime import date
 
 import pytest
 import tiktoken
@@ -12,15 +13,23 @@ from veltrix_assistant.retrieval.context import (
 )
 
 
-def _chunk(doc_id: str, text: str, access_level: str = "all") -> DocumentChunk:
+def _chunk(
+    doc_id: str,
+    text: str,
+    access_level: str = "all",
+    *,
+    effective_date: str = "2026-01-01",
+    supersedes_doc_ids: tuple[str, ...] = (),
+) -> DocumentChunk:
     metadata = DocumentMetadata(
         doc_id=doc_id,
         file=f"{doc_id}.md",
         title=doc_id,
         doc_type="policy",
         regions=("GLOBAL",),
-        effective_date="2026-01-01",
+        effective_date=effective_date,
         access_level=access_level,
+        supersedes_doc_ids=supersedes_doc_ids,
     )
     return DocumentChunk(
         chunk_id=doc_id,
@@ -55,6 +64,38 @@ def test_retrieval_is_deterministic_for_equal_scores() -> None:
     )
     results = retriever.search("leave", is_allowed=lambda _: True, limit=2)
     assert [result.chunk.chunk_id for result in results] == ["first", "second"]
+
+
+def test_retrieval_excludes_superseded_versions_only_when_replacement_applies() -> None:
+    retriever = BM25Retriever(
+        [
+            _chunk(
+                "POLICY-V1",
+                "Annual leave can carry forward; use by 30 June.",
+                effective_date="2025-01-01",
+            ),
+            _chunk(
+                "POLICY-V2",
+                "Annual leave can carry forward; use by 31 March.",
+                effective_date="2026-04-01",
+                supersedes_doc_ids=("POLICY-V1",),
+            ),
+        ]
+    )
+
+    current = retriever.search(
+        "annual leave carry forward deadline",
+        is_allowed=lambda metadata: metadata.effective_date <= date(2026, 11, 3),
+        limit=5,
+    )
+    historical = retriever.search(
+        "annual leave carry forward deadline",
+        is_allowed=lambda metadata: metadata.effective_date <= date(2025, 12, 31),
+        limit=5,
+    )
+
+    assert [match.chunk.document.doc_id for match in current] == ["POLICY-V2"]
+    assert [match.chunk.document.doc_id for match in historical] == ["POLICY-V1"]
 
 
 def test_context_keeps_source_labels_when_chunk_text_has_blank_lines() -> None:

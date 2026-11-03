@@ -24,12 +24,25 @@ class DocumentMetadata(BaseModel):
     regions: tuple[str, ...] = Field(min_length=1)
     effective_date: date
     access_level: AccessLevel
+    supersedes_doc_ids: tuple[str, ...] = Field(default_factory=tuple)
 
     @field_validator("doc_id", "title", "file")
     @classmethod
     def values_must_not_be_blank(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("value must not be blank")
+        return value
+
+    @field_validator("supersedes_doc_ids")
+    @classmethod
+    def superseded_ids_must_be_unique_and_nonblank(
+        cls,
+        value: tuple[str, ...],
+    ) -> tuple[str, ...]:
+        if any(not doc_id.strip() for doc_id in value):
+            raise ValueError("superseded document IDs must not be blank")
+        if len(value) != len(set(value)):
+            raise ValueError("superseded document IDs must be unique")
         return value
 
 
@@ -71,6 +84,11 @@ class RetrievedChunk(BaseModel):
 
     chunk: DocumentChunk
     score: float
+    retrieval_method: Literal["bm25", "vector", "hybrid"] = "bm25"
+    bm25_rank: int | None = None
+    vector_rank: int | None = None
+    bm25_score: float | None = None
+    vector_score: float | None = None
 
 
 class Citation(BaseModel):
