@@ -1,91 +1,102 @@
 # Design
 
-## Ingestion, retrieval, and policy decisions
+## Ingestion, chunking, and retrieval
 
-- `ingestion/loaders.py` extracts PDF text/tables, DOCX paragraphs/tables,
-  Markdown, and HTML. It renders textless PDF pages and runs Tesseract OCR;
-  extraction failures fail ingestion instead of silently dropping a document.
-- `ingestion/chunking.py` makes 500-token `cl100k_base` chunks with document
-  metadata and source locators. `retrieval/hybrid.py` creates the authorized
-  candidate set first, then retrieves from BM25 and persistent Chroma and
-  fuses stable chunk IDs with Reciprocal Rank Fusion: BM25 matches exact policy
-  terms, while vectors add semantic matches without requiring their scores to
-  share a scale. BM25-only mode remains available.
-  `retrieval/vector_store.py` idempotently adds, refreshes, and
-  removes indexed chunks. The default CPU feature-hashing vectors need no model
-  download; they are not semantic language embeddings. Optional providers are
-  a pre-provisioned local sentence-transformer model or OpenAI embeddings.
-  `retrieval/context.py` caps each model call at 3,000 corpus-text tokens and
-  logs that count before the call.
-- `policy/applicability.py` enforces role, region, effective date, and
-  authority/scope/recency precedence. Tied top sources remain available to
-  explain conflicts. `conversation.py` uses a requested past date and labels
-  readable future winners separately. The system prompt contains instructions
-  only; retrieved text is supplied separately as untrusted JSON evidence.
+`ingestion/pipeline.py` validates each manifest entry, loads its source, and
+creates 500-token `cl100k_base` chunks in `ingestion/chunking.py`. Chunks retain
+document metadata, page number, heading/section locator, and a stable content-
+derived ID. This keeps citations traceable and permits index synchronization.
 
-## Access control and privacy
+`ingestion/loaders.py` extracts PDF text and tables with pdfplumber, serializing
+table rows into searchable text; it also preserves DOCX tables and reads HTML
+and Markdown tables. PDF pages with fewer than 40 extracted characters are
+rendered with PyMuPDF and OCR'd automatically with Tesseract. Missing OCR
+support, timeouts, or extraction errors fail ingestion rather than silently
+discarding content. No corpus content is manually transcribed.
 
-- `api.py` resolves `X-Employee-Id` through `lookup_employee_identity`; role
-  and region never come from the message. `SessionBindingStore.bind` in
-  `security/identity.py` prevents session reuse by a different employee.
-- `/search` and `/chat` apply `is_document_applicable` or
-  `is_document_readable` from `policy/applicability.py` before retrieval
-  results can reach the model. `tools/leave.py` authorizes every read and write
-  through the authenticated employee; `can_access_employee_data` checks
-  employee, direct-report manager, and HR scope. Write previews do not mutate
-  data; execution rechecks rules in the same SQLite transaction as the update.
-- `security/privacy.py` centrally detects and redacts common email, phone,
-  employee-ID, government-ID, and bank-account patterns, plus configured
-  sensitive terms, before external LLM or embedding calls. This is not a
-  general name recognizer; teams must configure known sensitive terms and
-  validate rules against their own data. Redaction can be explicitly disabled
-  by configuration.
-- `llm.py` uses a request-planning call to select document search or one of the
-  five leave actions from the user's message and reference date. It receives no
-  retrieved document text, returns no executable arguments, and logs zero
-  corpus tokens; the application derives arguments and rechecks permissions,
-  leave rules, and write confirmation before executing a selected leave tool.
-- Logs exclude message bodies, names, email, phone, and retrieved text.
-  Employee records and ordinary leave-tool results are not passed to the model.
-  A future-balance calculation receives only its current balance, join date,
-  target date, the question, and authorized policy evidence. Model citations
-  are validated against supplied evidence. Offline mode returns source
-  excerpts without a model call and does not forecast balances.
-- `assess_user_message` in `security/guards.py` refuses common bulk-data and
-  instruction-override requests. Retrieved text cannot invoke tools or change
-  permissions; authorization remains in application code.
-- `workflow.py` runs the LangGraph guard, identity validation, intent router,
-  dispatch, conversation, citation-validation, and response nodes. Dispatch
-  nodes record the selected branch; retrieval and leave-tool operations run in
-  the conversation handler, which applies requester-scoped document filters
-  and existing tool permissions. When LangGraph is disabled, that handler
-  provides the direct compatibility flow.
-- `provenance.py` records Version 2 graph/request traces, retrieval method and
-  ranks, selected source identifiers and effective dates, tool outcomes,
-  citation-validation outcome, and token counts. Employee/session references
-  are HMAC-pseudonymized. Events reject raw message/document/tool-output keys;
-  no answer or corpus text is persisted. Without a configured
-  `PROVENANCE_PSEUDONYM_KEY`, a generated key is stored in the assistant-owned
-  SQLite database. Provenance write failures return an explicit service error
-  rather than silently dropping the audit record.
+`api.py` builds a BM25 retriever for every run. In hybrid mode it also syncs
+chunks to local persistent Chroma and combines BM25 and vector ranks using
+reciprocal rank fusion in `retrieval/hybrid.py`; this combines lexical matches
+with semantic candidates without comparing unlike score scales. BM25-only
+mode avoids Chroma and is useful when embeddings are unavailable. The default
+CPU feature-hashing embeddings need no model download, but are less semantic
+than a language embedding model. `retrieval/context.py` keeps corpus text sent
+to each answer-generation call at or below 3,000 tokens and logs that count.
+
+## Applicability and precedence
+
+`policy/applicability.py` implements the document rules. `is_document_readable`
+checks access level and region; `is_document_applicable` also checks the
+effective date. Search filters candidates with these checks before returning
+evidence to the answer model. `select_precedence_winners` orders applicable
+evidence by authority, region specificity, then effective date, preserving
+true ties so conflicting values are not silently chosen. Superseded versions
+are excluded, and `get_upcoming_winners` allows readable future winners to be
+identified and cited separately. `conversation.py` resolves requested
+historical reference dates and assembles the current and upcoming evidence.
+
+## Access control and leave actions
+
+`api.py` requires `X-Employee-Id` and uses
+`security/identity.py:lookup_employee_identity` to load role and region from
+SQLite; message claims cannot set identity. `SessionBindingStore.bind` binds a
+session to its first employee. `/search` and chat retrieval both filter
+documents using the authenticated audience before evidence can reach a model.
+
+Leave permissions are enforced inside `tools/leave.py`, not by the planner:
+`_requester`, `can_access_employee_data`, and `_target_is_allowed` check the
+authenticated employee, HR scope, and manager direct-report scope. Leave
+requests and balances are accessed only through these tools. Apply/cancel
+previews validate leave type, dates, balance, overlap, and working days without
+mutation; working-day counts exclude weekends and the applicable regional
+public holidays. Execution rechecks the rules and updates the request and
+balance in one SQLite transaction. `conversation.py` requires explicit
+confirmation before executing a proposed write. With an LLM configured,
+`workflow.py` uses a request-planning call to select document search or one of
+the five leave actions. The planner receives the message (PII-redacted before
+external calls by default) and reference date, returns an action/search query
+rather than executable arguments, and never receives retrieved text.
+Application code parses arguments and tool code remains the permission
+boundary.
+
+## Personal data, prompts, and audit
+
+`security/privacy.py:redact_pii` redacts detected email, phone, identifiers,
+and configured sensitive terms before external model or embedding calls
+(redaction is enabled by default and configurable). The planner receives no
+retrieved content. Answer generation receives the question and only the
+authorized evidence needed to answer; ordinary leave-tool results are not sent
+to the model. Future-balance calculations pass only the current balance, join
+date, target date, and relevant policy evidence. Application logs do not
+include raw messages, answers, or document text.
+
+`provenance.py` records ordered routing, authorization, retrieval, tool,
+citation-validation, and token-usage events in assistant-owned SQLite tables.
+It stores HMAC pseudonyms instead of employee/session IDs and rejects sensitive
+event keys; traces retain evidence identifiers and hashes, not source text.
+`api.py` persists the trace after a response or handled workflow error. A
+provenance storage failure returns an explicit service error. This audit trail
+helps explain which authorized evidence or tool outcome produced a response
+without retaining the conversation itself.
 
 ## Failure modes and scale
 
-Missing OCR, unreadable sources, invalid identities, session conflicts,
-provider failures, provenance-storage failures, and invalid proposals fail
-explicitly or fail closed. SQLite transactions prevent partial leave/balance
-updates and cancellation/restoration. These checks are covered by ingestion,
-access-control, retrieval, privacy, provenance, leave, and chat integration
-tests.
+Failures addressed include stale/superseded policy evidence, policy questions
+being mistaken for personal-balance lookups, unsupported carry-forward
+deadlines, duplicate tool facts in hybrid answers, and relevant calendar
+sections being lost when retrieval ranked unrelated chunks first. Version
+filtering, planner-assisted routing, bounded grounded answers, and focused
+retrieval queries address these cases. Automated tests cover ingestion,
+precedence, role-based access, leave rules, privacy/provenance, and `/chat`.
+Provider, OCR, identity, database, and provenance failures are reported
+explicitly or fail closed.
 
-Verified routing/retrieval failures included superseded policy versions
-appearing beside current policy, carry-forward questions being sent to a
-personal-balance tool, and hybrid answers repeating tool facts or inferring an
-unsupported deadline. Version-lineage filtering, policy-aware routing,
-separate policy-question generation, and source-grounded deadline instructions
-address these cases.
-
-BM25 remains in memory and scales linearly with the chunk set; Chroma persists
-vectors and supports metadata prefilters and incremental synchronization.
-Preserve the same pre-retrieval authorization boundary when scaling or changing
-providers.
+At 10,000 documents, the first likely bottlenecks are BM25's per-query scan and
+retokenization of all visible chunks, memory for the in-process corpus, and
+startup/index synchronization. The vector index does not remove the need to
+load chunks for metadata filtering and citation context. I would measure
+ingestion/startup time, memory, latency, and authorization-filtered recall;
+then use batched incremental indexing and a persistent sparse index with
+precomputed term statistics, retaining metadata prefilters before either
+retriever. Scale the vector store independently if benchmarks show it is also
+a bottleneck, and keep the same access-control boundary.
