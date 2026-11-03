@@ -893,6 +893,11 @@ def test_chat_read_tool_and_authorization_routes(tmp_path, monkeypatch) -> None:
         _wait_until_ready(client)
         self_balance = _chat(client, "What is my annual leave balance?", "balance-1")
         requests = _chat(client, "List my leave requests", "requests-1")
+        ambiguous_leave_check = _chat(
+            client,
+            "Check my leaves",
+            "ambiguous-leave-check",
+        )
         manager_balance = _chat(
             client,
             "Check E1001 annual leave balance",
@@ -935,6 +940,11 @@ def test_chat_read_tool_and_authorization_routes(tmp_path, monkeypatch) -> None:
     assert requests.json()["route"] == "tool"
     assert "REQ-FUTURE-1" in requests.json()["answer"]
     assert "+1-555" not in requests.json()["answer"]
+    ambiguous_body = ambiguous_leave_check.json()
+    assert ambiguous_body["route"] == "clarify"
+    assert "leave balance or your leave requests" in ambiguous_body["answer"]
+    assert ambiguous_body["citations"] == []
+    assert ambiguous_body["tool_calls"] == []
     assert forbidden.json()["route"] == "refuse"
     assert forbidden.json()["tool_calls"] == []
     assert manager_team.json()["route"] == "tool"

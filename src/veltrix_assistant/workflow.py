@@ -12,6 +12,7 @@ from typing_extensions import NotRequired, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from veltrix_assistant.conversation import (
+    _is_ambiguous_leave_check,
     _is_cancellation,
     _is_confirmation,
     _needs_retrieval,
@@ -269,6 +270,8 @@ class ChatWorkflow:
         intent = state.get("intent")
         if _is_confirmation(message) or _is_cancellation(message):
             return "confirmation"
+        if _is_ambiguous_leave_check(message):
+            return "clarification"
         if intent is not None:
             return "hybrid" if state.get("needs_retrieval") else "tool"
         if state.get("needs_retrieval"):

@@ -489,8 +489,24 @@ def _tool_intent(message: str) -> str | None:
     return None
 
 
+def _is_ambiguous_leave_check(message: str) -> bool:
+    lowered = re.sub(r"[-_]", " ", message.casefold())
+    return bool(
+        re.search(r"\b(check|show|view|see|look at)\b", lowered)
+        and re.search(r"\b(my|mine|me)\b", lowered)
+        and re.search(r"\bleaves?\b", lowered)
+        and not re.search(
+            r"\b(balance|remaining|left|requests?|status|pending|approved|cancelled)\b",
+            lowered,
+        )
+        and not any(cue in lowered for cue in _POLICY_CUES)
+    )
+
+
 def _needs_retrieval(message: str, intent: str | None) -> bool:
     lowered = re.sub(r"[-_]", " ", message.casefold())
+    if _is_ambiguous_leave_check(message):
+        return False
     policy_question = any(cue in lowered for cue in _POLICY_CUES)
     if intent is not None:
         return policy_question or _is_future_balance_question(message)
@@ -968,6 +984,11 @@ def respond_to_message(
         return _response(
             safety.message or "I can't help with that request.",
             "refuse",
+        )
+    if _is_ambiguous_leave_check(message):
+        return _response(
+            "Do you mean your leave balance or your leave requests?",
+            "clarify",
         )
 
     intent = _tool_intent(message)
