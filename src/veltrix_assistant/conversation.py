@@ -378,6 +378,19 @@ def _date_range(message: str, today: date) -> tuple[date, date] | None:
     return dates[0], dates[1]
 
 
+def _apply_date_range(message: str, today: date) -> tuple[date, date] | None:
+    date_range = _date_range(message, today)
+    if date_range is None or date_range[0] != date_range[1]:
+        return date_range
+    duration = re.search(r"\b(\d+)\s+days?\b", message, re.IGNORECASE)
+    if duration is None:
+        return date_range
+    duration_days = int(duration.group(1))
+    if duration_days < 1:
+        return date_range
+    return date_range[0], date_range[0] + timedelta(days=duration_days - 1)
+
+
 def _is_future_balance_question(message: str) -> bool:
     lowered = message.casefold()
     if not re.search(r"\bannual\s+leave\b", lowered):
@@ -504,9 +517,19 @@ def _is_ambiguous_leave_check(message: str) -> bool:
     )
 
 
+def _is_employee_contact_request(message: str) -> bool:
+    lowered = message.casefold()
+    asks_for_contact = re.search(
+        r"\b(email|e-mail|phone|telephone|contact(?:\s+(?:info|details|information))?)\b",
+        lowered,
+    )
+    asks_about_manager = re.search(r"\b(manager|supervisor|boss)\b", lowered)
+    return bool(asks_for_contact and asks_about_manager)
+
+
 def _needs_retrieval(message: str, intent: str | None) -> bool:
     lowered = re.sub(r"[-_]", " ", message.casefold())
-    if _is_ambiguous_leave_check(message):
+    if _is_ambiguous_leave_check(message) or _is_employee_contact_request(message):
         return False
     policy_question = any(cue in lowered for cue in _POLICY_CUES)
     if intent is not None:
@@ -626,7 +649,7 @@ def _clarification_for_tool(
         leave_type = _leave_type(message)
         if leave_type is None:
             missing.append("leave type (annual or sick)")
-        date_range = _date_range(message, today)
+        date_range = _apply_date_range(message, today)
         if date_range is None:
             missing.append("start and end dates")
         elif _is_past_date_range(date_range, today):
@@ -1008,16 +1031,25 @@ def respond_to_message(
             "Do you mean your leave balance or your leave requests?",
             "clarify",
         )
+    if _is_employee_contact_request(message):
+        return _response(
+            "I can help with Veltrix HR policies, holidays, and leave, "
+            "but I can't provide employee contact details.",
+            "refuse",
+        )
 
     intent = _tool_intent(message)
     tool_message = message
     if (
         pending_clarification is not None
         and intent is None
-        and (_date_range(message, today) is not None or _leave_type(message) is not None)
+        and (
+            _apply_date_range(message, today) is not None
+            or _leave_type(message) is not None
+        )
     ):
         intent = pending_clarification.intent
-        supplied_dates = _date_range(message, today)
+        supplied_dates = _apply_date_range(message, today)
         retained_dates = (
             f"{pending_clarification.start_date} to "
             f"{pending_clarification.end_date}"
@@ -1062,7 +1094,7 @@ def respond_to_message(
             re.IGNORECASE,
         ):
             intent = "apply_leave"
-            updated_range = _date_range(message, today)
+            updated_range = _apply_date_range(message, today)
             if updated_range is None:
                 replacement_clarification = (
                     "What revised start and end dates should I use?"
@@ -1138,7 +1170,7 @@ def respond_to_message(
             clarification, args = None, replacement_args
         if clarification is not None:
             if intent == "apply_leave":
-                date_range = _date_range(tool_message, today)
+                date_range = _apply_date_range(tool_message, today)
                 pending_clarification = PendingClarification(
                     employee_id=identity.employee_id,
                     intent="apply_leave",

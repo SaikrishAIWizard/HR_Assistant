@@ -429,6 +429,11 @@ def test_chat_returns_exact_rag_no_answer_and_refusal_routes(tmp_path, monkeypat
             "refuse-1",
         )
         off_topic = _chat(client, "Can you help me write Python code?", "refuse-2")
+        manager_contact = _chat(
+            client,
+            "What is my manager's contact info / email?",
+            "refuse-manager-contact",
+        )
 
     assert rag.status_code == 200
     rag_body = rag.json()
@@ -452,6 +457,9 @@ def test_chat_returns_exact_rag_no_answer_and_refusal_routes(tmp_path, monkeypat
     assert injection.json()["citations"] == []
     assert injection.json()["tool_calls"] == []
     assert off_topic.json()["route"] == "refuse"
+    assert manager_contact.json()["route"] == "refuse"
+    assert manager_contact.json()["citations"] == []
+    assert manager_contact.json()["tool_calls"] == []
 
 
 def test_chat_runs_workflow_and_persists_privacy_safe_provenance(
@@ -1065,6 +1073,43 @@ def test_chat_resolves_next_friday_and_yearless_ranges_and_clarifies_past_dates(
     }
     assert past_date.json()["route"] == "clarify"
     assert "already passed" in past_date.json()["answer"]
+
+
+def test_chat_uses_explicit_leave_duration_and_reports_insufficient_balance(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("APP_TODAY", "2026-11-03")
+    corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            "DELETE FROM leave_requests WHERE request_id = 'REQ-FUTURE-1'"
+        )
+    app = create_app(
+        corpus_dir=corpus_dir,
+        manifest_path=manifest_path,
+        database_path=database_path,
+    )
+
+    with TestClient(app) as client:
+        _wait_until_ready(client)
+        response = _chat(
+            client,
+            "Apply for 30 days of sick leave starting tomorrow",
+            "sick-duration",
+        )
+
+    body = response.json()
+    assert body["route"] == "tool"
+    assert body["pending_confirmation"] is False
+    assert body["tool_calls"][0]["status"] == "error"
+    assert body["tool_calls"][0]["args"] == {
+        "leave_type": "sick",
+        "start_date": "2026-11-04",
+        "end_date": "2026-12-03",
+    }
+    assert "Insufficient sick leave balance" in body["answer"]
+    assert "4 available" in body["answer"]
 
 
 def test_chat_write_requires_confirmation_and_revalidates_on_execution(
