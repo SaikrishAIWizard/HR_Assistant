@@ -76,43 +76,66 @@ Run the required test suite with `make test`.
 
 ## Architecture
 
+### Request orchestration (control flow)
+
 ```mermaid
 flowchart TD
-    C[Corpus and manifest] --> I[Ingestion, extraction and chunking]
-    I --> K[Chunks with document metadata and locators]
-    K --> B[BM25 index]
-    K --> V[(Persistent Chroma index)]
-
-    U[Employee request] --> A[FastAPI identity lookup and session binding]
-    A --> G[LangGraph safety guard and identity validation]
-    G --> O[Intent router and request planner]
-    O --> D[Conversation execution]
-    D -->|Search with requester context| F[Role, region, date and precedence filters]
-    B --> F
-    V --> F
-    F --> R[Ranked authorized evidence]
-    R --> L[Answer generation or offline excerpts]
-    L --> CV[Citation validation]
-    CV --> OUT[Chat response]
-    D -->|Validated read or confirmed write| T[Authorized leave tools]
-    T --> DB[(SQLite employee and leave data)]
-    T --> D
-    D --> OUT
-
-    G -. events .-> P[(Pseudonymous provenance trace)]
-    D -. retrieval and tool events .-> P
+    U[POST /chat] --> A[FastAPI: authenticate employee and bind session]
+    A --> G[LangGraph: safety guard]
+    G --> I[Validate identity]
+    G -->|refused| R[Build response]
+    I -->|invalid| R
+    I --> O[Intent router and optional LLM request planner]
+    O -->|policy| PD[Policy dispatch node]
+    O -->|hybrid| HD[Hybrid dispatch node]
+    O -->|leave action| TD[Leave-tool dispatch node]
+    O -->|clarify / confirm / fallback| XD[Corresponding dispatch node]
+    PD --> C[Conversation handler]
+    HD --> C
+    TD --> C
+    XD --> C
+    C --> CV[Citation validation]
+    CV --> R[Build response]
+    R --> END[Return ChatResponse]
+    G -. trace events .-> P[Provenance]
+    O -. selected action .-> P
+    C -. retrieval and tool events .-> P
     CV -. validation result .-> P
-    P --> PS[(SQLite provenance tables)]
 ```
 
-With an LLM configured, the request planner receives only the user message and
-reference date and selects document search, a leave action, clarification, or
-refusal. It does not receive retrieved documents or execute tools. The
-conversation layer derives tool arguments; tool code validates business rules
-and enforces permissions, and write actions require confirmation. Retrieval
-filters documents for the authenticated requester before evidence can reach
-answer generation. With `LLM_PROVIDER=none`, routing uses the deterministic
-compatibility path and document answers use matching excerpts.
+The LangGraph dispatch nodes select and record a branch; they do not themselves
+retrieve documents or call leave tools. The conversation handler performs those
+operations. With an LLM configured, the planner receives the user message and
+reference date, but no retrieved content, and selects an action without
+executing it. Without an LLM, deterministic routing is used. Application code
+derives leave-tool arguments; tool code enforces authorization and business
+rules, and write actions require confirmation.
+
+### RAG and document-answer path (data flow)
+
+```mermaid
+flowchart LR
+    SRC[Corpus and manifest] --> ING[Ingestion: extract, chunk, retain metadata and locators]
+    ING --> BM[BM25 index]
+    ING --> VS[(Persistent Chroma index)]
+
+    Q[Question and authenticated requester] --> AUTH[Role, region, date and metadata filtering]
+    BM --> RET[Retriever]
+    VS --> RET
+    AUTH --> RET
+    RET --> FUSE[Rank candidates; RRF fusion in hybrid mode]
+    FUSE --> APP[Relevance, precedence and upcoming-change selection]
+    APP --> CTX[Build authorized context within token budget]
+    CTX --> GEN[LLM grounded answer or offline source excerpts]
+    GEN --> CV[Validate citations against selected evidence]
+    CV --> RESP[Return RAG answer and citations]
+```
+
+In hybrid mode, the retriever queries BM25 and Chroma over authorized candidates
+and fuses their rankings with reciprocal rank fusion (RRF). In BM25 mode,
+Chroma and RRF are absent. The `/search` endpoint uses the same authorization
+and retrieval concepts but returns search results directly; it does not pass
+through the chat orchestrator or answer-generation step.
 
 ## Docker
 
