@@ -1,47 +1,18 @@
-# Run from the project root. -v prints each selected test as PASSED.
+# Run from the repository root in PowerShell.
+# If ./data/corpus is missing, stage the supplied assessment files:
+if (-not (Test-Path .\data\corpus)) {
+    New-Item -ItemType Directory -Force .\data | Out-Null
+    Copy-Item .\corpus .\data\corpus -Recurse
+}
+if (-not (Test-Path .\data\manifest.json)) { Copy-Item .\manifest.json .\data\manifest.json }
+if (-not (Test-Path .\data\veltrix.db)) { Copy-Item .\veltrix.db .\data\veltrix.db }
+if (-not (Test-Path .\.env)) { Copy-Item .\.env.example .\.env }
 
-# Task 1: ingestion, locators, retrieval filtering, and context token limit
-uv run pytest -v tests/test_ingestion.py::test_ingests_supported_formats_and_preserves_metadata tests/test_ingestion.py::test_pdf_uses_typographic_headings_as_locators tests/test_retrieval.py::test_retrieval_applies_access_filter_before_results tests/test_retrieval.py::test_context_never_exceeds_hard_token_ceiling
+# Set OPENAI_API_KEY in .env, then build and start the API:
+docker compose up --build -d
 
-# Task 2: eligibility, precedence/ties, and API access/date filtering
-uv run pytest -v tests/test_applicability.py::test_eligibility_uses_role_region_and_reference_date tests/test_applicability.py::test_authority_precedes_region_scope_and_recency tests/test_applicability.py::test_exact_precedence_tie_retains_every_winner tests/test_applicability.py::test_upcoming_winner_is_returned_with_a_regional_precedence_check tests/test_api.py::test_search_excludes_documents_not_yet_effective
-
-# Task 3: regional holidays, atomic application, permissions, cancellation
-uv run pytest -v tests/test_leave_tools.py::test_calendar_selection_is_region_specific tests/test_leave_tools.py::test_apply_leave_counts_holidays_and_debits_balance_atomically tests/test_leave_tools.py::test_balance_and_request_tools_enforce_employee_manager_and_hr_scopes tests/test_leave_tools.py::test_cancel_leave_marks_cancelled_and_restores_balance tests/test_leave_tools.py::test_failed_balance_restore_rolls_back_request_cancellation
-
-# Task 4: trusted identity, session ownership, privacy, and request guard
-uv run pytest -v tests/test_security.py::test_employee_identity_is_resolved_only_from_the_database tests/test_security.py::test_session_is_bound_once_and_rejects_a_different_employee tests/test_security.py::test_email_is_masked_and_phone_is_never_projected tests/test_security.py::test_message_guard_refuses_injection_hidden_data_and_bulk_requests
-
-# Task 5: chat routes, clarifications, and confirmed writes
-uv run pytest -v tests/test_api.py::test_chat_returns_exact_rag_no_answer_and_refusal_routes tests/test_api.py::test_chat_clarifies_all_missing_apply_fields_at_once tests/test_api.py::test_chat_write_requires_confirmation_and_revalidates_on_execution tests/test_api.py::test_chat_changed_write_proposal_replaces_the_old_pending_action tests/test_api.py::test_chat_cancellation_executes_only_after_confirmation tests/test_api.py::test_chat_confirmation_is_limited_to_bound_session_owner
-
-# Run the complete test suite
-uv run pytest -v
-
-
-
-uv sync
-uv run veltrix-api
-
-
-# Task 1: ingestion and retrieval
-uv run pytest tests/test_ingestion.py tests/test_retrieval.py
-
-# Task 2: applicability, precedence, and API filtering
-uv run pytest tests/test_applicability.py tests/test_api.py
-
-# Task 3: leave tools and rules
-uv run pytest tests/test_leave_tools.py
-
-# Run everything
-uv run pytest
-
-# Docker: first stage corpus/, manifest.json, and veltrix.db under .\data
-docker compose build
-docker compose up -d
-docker compose ps
+# Check readiness (HTTP 200 means ingestion is complete):
 Invoke-RestMethod http://localhost:8000/health
-docker compose logs -f api
 
-# Stop the Docker service when finished
+# Stop the API:
 docker compose down

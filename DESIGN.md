@@ -8,8 +8,10 @@
 - `ingestion/chunking.py` makes 500-token `cl100k_base` chunks with document
   metadata and source locators. `retrieval/hybrid.py` creates the authorized
   candidate set first, then retrieves from BM25 and persistent Chroma and
-  fuses stable chunk IDs with Reciprocal Rank Fusion. BM25-only mode remains
-  available. `retrieval/vector_store.py` idempotently adds, refreshes, and
+  fuses stable chunk IDs with Reciprocal Rank Fusion: BM25 matches exact policy
+  terms, while vectors add semantic matches without requiring their scores to
+  share a scale. BM25-only mode remains available.
+  `retrieval/vector_store.py` idempotently adds, refreshes, and
   removes indexed chunks. The default CPU feature-hashing vectors need no model
   download; they are not semantic language embeddings. Optional providers are
   a pre-provisioned local sentence-transformer model or OpenAI embeddings.
@@ -68,6 +70,13 @@ explicitly or fail closed. SQLite transactions prevent partial leave/balance
 updates and cancellation/restoration. These checks are covered by ingestion,
 access-control, retrieval, privacy, provenance, leave, and chat integration
 tests.
+
+Verified routing/retrieval failures included superseded policy versions
+appearing beside current policy, carry-forward questions being sent to a
+personal-balance tool, and hybrid answers repeating tool facts or inferring an
+unsupported deadline. Version-lineage filtering, policy-aware routing,
+separate policy-question generation, and source-grounded deadline instructions
+address these cases.
 
 BM25 remains in memory and scales linearly with the chunk set; Chroma persists
 vectors and supports metadata prefilters and incremental synchronization.

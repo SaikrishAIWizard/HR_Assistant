@@ -43,71 +43,33 @@ The implementation uses a `src/` package layout:
   persisted in assistant-owned SQLite tables.
 - `tests/` — focused ingestion, retrieval, and token-budget tests.
 
-## Setup and run ingestion
+## Setup and run
 
-Python 3.10 or later is required. PDF OCR uses the Tesseract executable; install
-it in the runtime image/environment and ensure it is available on `PATH` (or
-set `TESSERACT_CMD`). The checked-in `.env.example` uses the assessment's
-`./data` layout; the local, ignored `.env` points to the supplied root-level
-corpus and database.
+Python 3.10 or later and Docker Compose are required. The service reads the
+corpus, manifest, and SQLite database from `./data`. The assessment-provided
+`./data` directory is not required in the submitted repository; place the
+provided files there before starting the service. See [`run.txt`](./run.txt)
+for the short PowerShell command sequence.
 
-```powershell
-uv sync
-uv run pytest
-make test
-uv run veltrix-ingest --corpus-dir .\corpus --manifest-path .\manifest.json
-uv run veltrix-api
-```
+Copy `.env.example` to `.env` and set `OPENAI_API_KEY` for generated answers.
+Never commit `.env` or put a real key in `.env.example`. `docker compose up
+--build -d` starts the API; `/health` returns HTTP 200 after document ingestion
+and vector-index synchronization complete. The API uses the configured model
+with temperature 0, validates citations, and limits corpus text to 3,000
+tokens per model call. Set `LLM_PROVIDER=none` for offline extractive answers.
 
-`uv sync` creates and maintains the project `.venv`. For live OpenAI-backed
-answers, set `OPENAI_API_KEY` in the ignored `.env`; `LLM_PROVIDER=none` keeps
-the application offline and returns cited source excerpts. The API starts
-ingestion in the background; `GET /health` returns 503 while loading and 200
-once ready.
-Use an `OPENAI_MODEL` that is available to the configured provider. Leave
-`OPENAI_BASE_URL` blank for the official OpenAI API; set it to the provider's
-OpenAI-compatible `/v1` endpoint when using a different service. The API logs
-the provider's HTTP status and error code (when supplied) to help distinguish
-an unavailable model from a connection or authentication problem.
 `POST /search` accepts `{"query": "annual leave", "limit": 5}` and requires an
-`X-Employee-Id` header found in the configured SQLite database. It applies
-role, region, and reference-date document filters before retrieval. This
-diagnostic endpoint separates currently applicable `results` from `upcoming`
-changes that would win precedence on their effective date. The decision rules
-and current extraction boundary are documented in
-[`TASK2_TECHNICAL_IMPLEMENTATION.md`](./TASK2_TECHNICAL_IMPLEMENTATION.md).
-The five callable leave tools are bound to an authenticated employee through
-`app.state.leave_tool_factory.for_employee(employee_id)`; they are not exposed
-as separate HTTP routes. `POST /chat` applies the safety guard, selects among
-the required response routes, uses filtered retrieval and/or authorized tools,
-and persists a single write proposal per session until confirmation. With
-`LLM_PROVIDER=openai`, it generates a grounded answer from authorized evidence
-with temperature 0, validated citations, and a 3,000-token corpus-text ceiling.
-The optional `none` provider returns cited source excerpts without external
-calls. Task 3's access rules,
-atomicity, and date handling are documented in
-[`TASK3_TECHNICAL_IMPLEMENTATION.md`](./TASK3_TECHNICAL_IMPLEMENTATION.md).
-The retrieval test endpoint resolves identity from the employee database and
-can bind an optional `session_id` to its first authenticated employee. Security
-helpers enforce privacy-safe record projection and classify bulk-data or
-instruction-override requests before chat retrieval or tool selection. See
-[`DESIGN.md`](./DESIGN.md) for security boundaries and privacy guarantees,
-[`TASK4_TECHNICAL_IMPLEMENTATION.md`](./TASK4_TECHNICAL_IMPLEMENTATION.md) for
-identity and access-control details, and
-[`TASK5_TECHNICAL_IMPLEMENTATION.md`](./TASK5_TECHNICAL_IMPLEMENTATION.md) for
-the chat contract, date handling, routing, and confirmation flow.
+`X-Employee-Id` header present in the configured database. It filters by role,
+region, and reference date, and distinguishes applicable results from upcoming
+changes. `POST /chat` uses filtered retrieval and authorized leave tools,
+supports the required response routes, and requires confirmation before
+executing leave writes. Tool permissions are enforced in the application, not
+delegated to the model.
 
-Hybrid retrieval, centralized PII redaction, LangGraph orchestration, and
-provenance settings are configured through `.env`; defaults keep embeddings
-local, use Chroma under `./data/vector_db`, enable redaction, enable provenance
-schema version 2, and use LangGraph. Set `RETRIEVAL_MODE=bm25` or disable
-`LANGGRAPH_ENABLED` to use the compatibility paths. PII rules cover common
-identifiers and optional configured sensitive terms; they are not general
-name-recognition or DLP.
-
-The ingestion command reports document and chunk counts without printing
-document contents. Never put real API keys in `.env.example` or commit a local
-`.env` file.
+Hybrid retrieval, local embeddings, PII redaction, LangGraph orchestration, and
+pseudonymous provenance are enabled by default. See [`DESIGN.md`](./DESIGN.md)
+for the architecture, security boundaries, failure modes, and scaling notes.
+Run the required test suite with `make test`.
 
 ## Architecture
 
