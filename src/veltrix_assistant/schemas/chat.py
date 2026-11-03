@@ -76,12 +76,18 @@ class PendingAction(BaseModel):
 
 
 class PendingClarification(BaseModel):
-    """The details already provided for a leave request awaiting clarification."""
+    """A session-bound leave request or lookup awaiting clarification."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     employee_id: str = Field(min_length=1)
-    intent: Literal["apply_leave"]
+    intent: Literal[
+        "apply_leave",
+        "clarify_leave_lookup",
+        "get_leave_balance",
+        "list_leave_requests",
+    ]
     leave_type: Literal["annual", "sick"] | None = None
     start_date: str | None = None
     end_date: str | None = None
+    original_message: str = ""

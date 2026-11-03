@@ -66,6 +66,9 @@ identities. The application will validate all details, permissions, and
 confirmations before any action runs. Do not select apply_leave or cancel_leave
 for hypothetical, informational, or negated requests; use search_documents for
 policy and how-to questions.
+When the user explicitly asks to apply, request, book, or schedule leave,
+select apply_leave even if dates or leave type are missing; the application
+will ask for the missing details before preparing a request.
 For search_documents, provide a concise search_query with useful domain terms
 and relevant dates or years. For example, an upcoming-holidays question should
 search the applicable public-holiday calendar for the reference year.

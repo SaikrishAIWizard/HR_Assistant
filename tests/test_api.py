@@ -1252,6 +1252,110 @@ def test_chat_read_tool_and_authorization_routes(tmp_path, monkeypatch) -> None:
     assert hybrid_body["tool_calls"][0]["name"] == "get_leave_balance"
 
 
+@pytest.mark.parametrize(
+    ("followup", "expected_tool"),
+    [
+        ("yes leave balance", "get_leave_balance"),
+        ("leave requests", "list_leave_requests"),
+    ],
+)
+@pytest.mark.parametrize("langgraph_enabled", ["true", "false"])
+def test_ambiguous_leave_followup_preserves_requester_and_selection(
+    tmp_path,
+    monkeypatch,
+    followup: str,
+    expected_tool: str,
+    langgraph_enabled: str,
+) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("LANGGRAPH_ENABLED", langgraph_enabled)
+    corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
+    planned_messages: list[str] = []
+
+    def fake_plan(
+        self: OpenAIChatProvider,
+        message: str,
+        *,
+        reference_date: date,
+        corpus_tokens: int,
+    ) -> RequestPlan:
+        assert isinstance(self, OpenAIChatProvider)
+        assert corpus_tokens == 0
+        planned_messages.append(message)
+        return RequestPlan(action="refuse")
+
+    monkeypatch.setattr(OpenAIChatProvider, "plan_request", fake_plan)
+    app = create_app(
+        corpus_dir=corpus_dir,
+        manifest_path=manifest_path,
+        database_path=database_path,
+    )
+
+    with TestClient(app) as client:
+        _wait_until_ready(client)
+        clarification = _chat(
+            client,
+            "Check my leaves",
+            "ambiguous-followup",
+        )
+        selected = _chat(
+            client,
+            followup,
+            "ambiguous-followup",
+        )
+
+    assert clarification.json()["route"] == "clarify"
+    selected_body = selected.json()
+    assert selected_body["route"] == "tool"
+    assert selected_body["tool_calls"][0]["name"] == expected_tool
+    assert selected_body["tool_calls"][0]["args"]["employee_id"] == "E1001"
+    if expected_tool == "get_leave_balance":
+        assert "annual: 8.0 days" in selected_body["answer"]
+    else:
+        assert "REQ-FUTURE-1" in selected_body["answer"]
+    if langgraph_enabled == "true":
+        assert planned_messages == ["Check my leaves", followup]
+    else:
+        assert planned_messages == []
+
+
+@pytest.mark.parametrize("langgraph_enabled", ["true", "false"])
+def test_employee_target_clarification_accepts_my_followup(
+    tmp_path,
+    monkeypatch,
+    langgraph_enabled: str,
+) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "none")
+    monkeypatch.setenv("LANGGRAPH_ENABLED", langgraph_enabled)
+    corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
+    app = create_app(
+        corpus_dir=corpus_dir,
+        manifest_path=manifest_path,
+        database_path=database_path,
+    )
+
+    with TestClient(app) as client:
+        _wait_until_ready(client)
+        clarification = _chat(
+            client,
+            "Check leave balance",
+            "employee-target-followup",
+        )
+        selected = _chat(
+            client,
+            "my",
+            "employee-target-followup",
+        )
+
+    assert clarification.json()["route"] == "clarify"
+    assert "employee ID" in clarification.json()["answer"]
+    selected_body = selected.json()
+    assert selected_body["route"] == "tool"
+    assert selected_body["tool_calls"][0]["name"] == "get_leave_balance"
+    assert selected_body["tool_calls"][0]["args"]["employee_id"] == "E1001"
+
+
 def test_chat_clarifies_all_missing_apply_fields_at_once(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("APP_TODAY", "2026-11-02")
     corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
@@ -1314,6 +1418,123 @@ def test_chat_clarifies_dates_for_plural_sick_leave_request(
         "start_date": "2026-12-07",
         "end_date": "2026-12-08",
     }
+
+
+def test_numeric_date_followup_resumes_sick_leave_clarification(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("APP_TODAY", "2026-11-03")
+    corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
+    app = create_app(
+        corpus_dir=corpus_dir,
+        manifest_path=manifest_path,
+        database_path=database_path,
+    )
+
+    with TestClient(app) as client:
+        _wait_until_ready(client)
+        clarification = _chat(
+            client,
+            "Can you apply for two sick leaves next month",
+            "numeric-date-followup",
+        )
+        invalid_followup = _chat(
+            client,
+            "next Wednesday and Thursday",
+            "numeric-date-followup",
+        )
+        numeric_dates = _chat(
+            client,
+            "02-12-2026 and 03-12-2026",
+            "numeric-date-followup",
+        )
+
+    assert clarification.json()["route"] == "clarify"
+    assert invalid_followup.json()["route"] == "clarify"
+    assert "start and end dates" in invalid_followup.json()["answer"]
+    assert numeric_dates.json()["route"] == "tool"
+    assert numeric_dates.json()["pending_confirmation"] is True
+    assert numeric_dates.json()["tool_calls"][0]["args"] == {
+        "leave_type": "sick",
+        "start_date": "2026-12-02",
+        "end_date": "2026-12-03",
+    }
+
+
+@pytest.mark.parametrize("langgraph_enabled", ["true", "false"])
+def test_chat_preserves_leave_action_when_planner_selects_document_search(
+    tmp_path,
+    monkeypatch,
+    langgraph_enabled: str,
+) -> None:
+    monkeypatch.setenv("APP_TODAY", "2026-11-02")
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("LANGGRAPH_ENABLED", langgraph_enabled)
+    corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
+    planned_messages: list[str] = []
+    queries = (
+        "Can you apply for two sick leaves next month?",
+        "I'd like to request two sick days next month.",
+        "Please schedule two days of sick leave next month.",
+    )
+
+    def fake_plan(
+        self: OpenAIChatProvider,
+        message: str,
+        *,
+        reference_date: date,
+        corpus_tokens: int,
+    ) -> RequestPlan:
+        assert isinstance(self, OpenAIChatProvider)
+        assert reference_date == date(2026, 11, 2)
+        assert corpus_tokens == 0
+        planned_messages.append(message)
+        return RequestPlan(
+            action="search_documents",
+            search_query="sick leave policy",
+        )
+
+    monkeypatch.setattr(OpenAIChatProvider, "plan_request", fake_plan)
+    app = create_app(
+        corpus_dir=corpus_dir,
+        manifest_path=manifest_path,
+        database_path=database_path,
+    )
+
+    with TestClient(app) as client:
+        _wait_until_ready(client)
+        for index, query in enumerate(queries):
+            session_id = f"planner-sick-leave-{index}"
+            clarification = _chat(client, query, session_id)
+            clarification_body = clarification.json()
+            assert clarification_body["route"] == "clarify"
+            assert "start and end dates next month" in clarification_body["answer"]
+            assert clarification_body["citations"] == []
+            assert clarification_body["tool_calls"] == []
+
+            preview = _chat(client, "December 7 to 8", session_id)
+            preview_body = preview.json()
+            assert preview_body["route"] == "tool"
+            assert preview_body["pending_confirmation"] is True
+            assert preview_body["tool_calls"][0]["name"] == "apply_leave"
+            assert preview_body["tool_calls"][0]["args"] == {
+                "leave_type": "sick",
+                "start_date": "2026-12-07",
+                "end_date": "2026-12-08",
+            }
+
+    initial_plan_messages = (
+        planned_messages[::2]
+        if langgraph_enabled == "true"
+        else planned_messages
+    )
+    assert initial_plan_messages == list(queries)
+    expected_plan_calls = len(queries) * (
+        2 if langgraph_enabled == "true" else 1
+    )
+    assert len(planned_messages) == expected_plan_calls
 
 
 def test_chat_keeps_apply_context_across_date_clarifications(
@@ -1732,6 +1953,78 @@ def test_chat_can_cancel_a_generated_uuid_request_id(tmp_path, monkeypatch) -> N
 
     assert proposal.json()["pending_confirmation"] is True
     assert proposal.json()["tool_calls"][0]["args"]["request_id"] == request_id
+    assert confirmed.json()["tool_calls"][0]["status"] == "success"
+    with sqlite3.connect(database_path) as connection:
+        status = connection.execute(
+            "SELECT status FROM leave_requests WHERE request_id = ?",
+            (request_id,),
+        ).fetchone()[0]
+    assert status == "cancelled"
+
+
+def test_request_id_followup_after_listing_previews_cancellation(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("APP_TODAY", "2026-11-03")
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
+    request_id = "92cf3b51-324b-45b8-8984-f0063a119748"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """
+            INSERT INTO leave_requests VALUES (
+                ?, 'E1001', 'sick', '2026-12-02', '2026-12-03',
+                2, 'pending', '2026-11-03T00:00:00+00:00'
+            )
+            """,
+            (request_id,),
+        )
+
+    planned_messages: list[str] = []
+
+    def fake_plan(
+        self: OpenAIChatProvider,
+        message: str,
+        *,
+        reference_date: date,
+        corpus_tokens: int,
+    ) -> RequestPlan:
+        assert isinstance(self, OpenAIChatProvider)
+        assert reference_date == date(2026, 11, 3)
+        assert corpus_tokens == 0
+        planned_messages.append(message)
+        return RequestPlan(action="list_leave_requests")
+
+    monkeypatch.setattr(OpenAIChatProvider, "plan_request", fake_plan)
+    app = create_app(
+        corpus_dir=corpus_dir,
+        manifest_path=manifest_path,
+        database_path=database_path,
+    )
+
+    with TestClient(app) as client:
+        _wait_until_ready(client)
+        listed = _chat(client, "Check my leave request.", "cancel-followup")
+        cancellation_preview = _chat(
+            client,
+            request_id,
+            "cancel-followup",
+        )
+        confirmed = _chat(client, "Confirm", "cancel-followup")
+
+    assert listed.json()["route"] == "tool"
+    assert request_id in listed.json()["answer"]
+    preview_body = cancellation_preview.json()
+    assert preview_body["route"] == "tool"
+    assert preview_body["pending_confirmation"] is True
+    assert preview_body["tool_calls"][0]["name"] == "cancel_leave"
+    assert preview_body["tool_calls"][0]["args"] == {
+        "request_id": request_id,
+    }
+    assert planned_messages == ["Check my leave request.", "Confirm"]
+
     assert confirmed.json()["tool_calls"][0]["status"] == "success"
     with sqlite3.connect(database_path) as connection:
         status = connection.execute(

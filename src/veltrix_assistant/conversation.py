@@ -48,6 +48,9 @@ _REQUEST_ID_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _ISO_DATE_PATTERN = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
+_DAY_MONTH_YEAR_PATTERN = re.compile(
+    r"\b(?P<day>\d{1,2})-(?P<month>\d{1,2})-(?P<year>20\d{2})\b"
+)
 _MONTH_PATTERN = "(?:" + "|".join(
     sorted(
         {
@@ -317,6 +320,22 @@ def _extract_dates(message: str) -> tuple[date, ...] | None:
             iso_spans.append(match.span())
         except ValueError:
             return None
+    numeric_date_spans: list[tuple[int, int]] = []
+    for match in _DAY_MONTH_YEAR_PATTERN.finditer(message):
+        try:
+            dates.append(
+                (
+                    match.start(),
+                    date(
+                        int(match.group("year")),
+                        int(match.group("month")),
+                        int(match.group("day")),
+                    ),
+                )
+            )
+            numeric_date_spans.append(match.span())
+        except ValueError:
+            return None
     for match in _DAY_RANGE_PATTERN.finditer(message):
         groups = match.groupdict()
         month = groups["month_after"] or groups["month_before"]
@@ -337,6 +356,9 @@ def _extract_dates(message: str) -> tuple[date, ...] | None:
         if any(
             match.start() < iso_end and match.end() > iso_start
             for iso_start, iso_end in iso_spans
+        ) or any(
+            match.start() < numeric_end and match.end() > numeric_start
+            for numeric_start, numeric_end in numeric_date_spans
         ) or any(
             match.start() < range_end and match.end() > range_start
             for range_start, range_end in range_spans
@@ -476,6 +498,10 @@ def _request_status(message: str) -> str | None:
     return statuses[0] if len(statuses) == 1 else None
 
 
+def _is_request_id_only(message: str) -> bool:
+    return _REQUEST_ID_PATTERN.fullmatch(message.strip()) is not None
+
+
 def _tool_intent(message: str) -> str | None:
     lowered = re.sub(r"[-_]", " ", message.casefold())
     policy_question = any(cue in lowered for cue in _POLICY_CUES)
@@ -487,14 +513,17 @@ def _tool_intent(message: str) -> str | None:
         return "get_leave_balance"
     if re.search(r"\b(cancel|withdraw)\b.{0,50}\b(leave|request)\b", lowered):
         return "cancel_leave"
+    if _is_request_id_only(message):
+        return "cancel_leave"
     if re.search(r"\b(team leave|team members off|who is off)\b", lowered) or (
         "team" in lowered
         and re.search(r"\bwho\b.{0,40}\b(?:on leave|off)\b", lowered)
     ):
         return "get_team_leave"
     if re.search(
-        r"\b(apply|request|book|take|want|need)\b.{0,50}"
-        r"\b(annual|sick)?\s*leaves?\b",
+        r"\b(apply|request|book|schedule|arrange|submit|file|take|want|need)\b"
+        r".{0,60}\b(?:(?:annual|sick)\s+(?:leaves?|days?)(?:\s+off)?|"
+        r"leaves?|time off)\b",
         lowered,
     ) and not any(cue in lowered for cue in _POLICY_CUES):
         return "apply_leave"
@@ -991,6 +1020,7 @@ def respond_to_message(
             raise ValueError(
                 "Stored chat clarification belongs to a different employee."
             )
+    is_clarification_followup = pending_clarification is not None
 
     stored_pending = session_store.consume_pending(session_id, identity.employee_id)
     pending: PendingAction | None = None
@@ -1034,8 +1064,17 @@ def respond_to_message(
             {"tool_name": pending.name, "outcome": "new_message"},
         )
 
-    safety = assess_user_message(message)
-    if safety_decision is not None:
+    safety_message = message
+    if (
+        is_clarification_followup
+        and pending_clarification is not None
+        and pending_clarification.original_message
+    ):
+        safety_message = (
+            f"{pending_clarification.original_message} {message}"
+        ).strip()
+    safety = assess_user_message(safety_message)
+    if safety_decision is not None and not is_clarification_followup:
         safety = safety_decision
     elif trace is not None:
         trace.record(
@@ -1048,7 +1087,17 @@ def respond_to_message(
             safety.message or "I can't help with that request.",
             "refuse",
         )
-    if _is_ambiguous_leave_check(message):
+    if _is_ambiguous_leave_check(message) and not is_clarification_followup:
+        pending_clarification = PendingClarification(
+            employee_id=identity.employee_id,
+            intent="clarify_leave_lookup",
+            original_message=message,
+        )
+        session_store.store_pending_clarification(
+            session_id,
+            identity.employee_id,
+            pending_clarification.model_dump_json(),
+        )
         return _response(
             "Do you mean your leave balance or your leave requests?",
             "clarify",
@@ -1064,14 +1113,59 @@ def respond_to_message(
     tool_message = message
     if (
         pending_clarification is not None
-        and intent is None
-        and (
-            _apply_date_range(message, today) is not None
-            or _leave_type(message) is not None
-        )
+        and pending_clarification.intent == "clarify_leave_lookup"
+    ):
+        combined_message = (
+            f"{pending_clarification.original_message} {message}"
+        ).strip()
+        selected_intent = _tool_intent(combined_message)
+        if selected_intent not in {"get_leave_balance", "list_leave_requests"}:
+            session_store.store_pending_clarification(
+                session_id,
+                identity.employee_id,
+                pending_clarification.model_dump_json(),
+            )
+            return _response(
+                "Please choose whether you want your leave balance or your leave requests.",
+                "clarify",
+            )
+        intent = selected_intent
+        tool_message = combined_message
+        pending_clarification = None
+    elif (
+        pending_clarification is not None
+        and pending_clarification.intent
+        in {"get_leave_balance", "list_leave_requests"}
     ):
         intent = pending_clarification.intent
+        tool_message = (
+            f"{pending_clarification.original_message} {message}"
+        ).strip()
+        pending_clarification = None
+    elif (
+        pending_clarification is not None
+        and pending_clarification.intent == "apply_leave"
+        and intent is None
+    ):
         supplied_dates = _apply_date_range(message, today)
+        supplied_leave_type = _leave_type(message)
+        if supplied_dates is None and supplied_leave_type is None:
+            session_store.store_pending_clarification(
+                session_id,
+                identity.employee_id,
+                pending_clarification.model_dump_json(),
+            )
+            leave_description = (
+                f"{pending_clarification.leave_type} leave"
+                if pending_clarification.leave_type is not None
+                else "leave"
+            )
+            return _response(
+                f"Please provide the start and end dates for your "
+                f"{leave_description}, for example 02-12-2026 to 03-12-2026.",
+                "clarify",
+            )
+        intent = pending_clarification.intent
         retained_dates = (
             f"{pending_clarification.start_date} to "
             f"{pending_clarification.end_date}"
@@ -1080,7 +1174,7 @@ def respond_to_message(
             and pending_clarification.end_date is not None
             else ""
         )
-        retained_leave_type = _leave_type(message) or pending_clarification.leave_type
+        retained_leave_type = supplied_leave_type or pending_clarification.leave_type
         tool_message = (
             f"apply {retained_leave_type or ''} leave {retained_dates} {message}"
         )
@@ -1091,14 +1185,19 @@ def respond_to_message(
         plan is None
         and llm_provider is not None
         and pending is None
-        and pending_clarification is None
+        and not is_clarification_followup
+        and not _is_request_id_only(message)
     ):
         plan = llm_provider.plan_request(
             message,
             reference_date=today,
             corpus_tokens=0,
         )
-    if plan is not None and pending is None and pending_clarification is None:
+    if (
+        plan is not None
+        and pending is None
+        and not is_clarification_followup
+    ):
         planned_action = plan.action
         if request_plan is None and trace is not None:
             trace.record(
@@ -1116,13 +1215,15 @@ def respond_to_message(
             intent = plan.action
             planned_action = plan.action
         elif plan.action == "search_documents":
-            if intent is None or not _needs_retrieval(message, intent):
+            if intent is None:
                 intent = None
                 planned_action = "search_documents"
             else:
                 planned_action = intent
             planned_search_query = plan.search_query
         elif plan.action == "clarify":
+            planned_action = intent
+        elif intent is not None:
             planned_action = intent
         elif _needs_retrieval(message, intent):
             intent = None
@@ -1264,6 +1365,18 @@ def respond_to_message(
                     end_date=(
                         date_range[1].isoformat() if date_range is not None else None
                     ),
+                    original_message=tool_message,
+                )
+                session_store.store_pending_clarification(
+                    session_id,
+                    identity.employee_id,
+                    pending_clarification.model_dump_json(),
+                )
+            elif intent in {"get_leave_balance", "list_leave_requests"}:
+                pending_clarification = PendingClarification(
+                    employee_id=identity.employee_id,
+                    intent=intent,
+                    original_message=tool_message,
                 )
                 session_store.store_pending_clarification(
                     session_id,

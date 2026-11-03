@@ -15,6 +15,7 @@ from veltrix_assistant.conversation import (
     _is_ambiguous_leave_check,
     _is_cancellation,
     _is_confirmation,
+    _is_request_id_only,
     _needs_retrieval,
     _response,
     _tool_intent,
@@ -251,7 +252,7 @@ class ChatWorkflow:
         intent = _tool_intent(message)
         plan: RequestPlan | None = None
         provider = state["llm_provider"]
-        if provider is not None:
+        if provider is not None and not _is_request_id_only(message):
             plan = provider.plan_request(
                 message,
                 reference_date=state["today"],
@@ -270,14 +271,15 @@ class ChatWorkflow:
                 intent = plan.action
                 planned_action = plan.action
             elif plan.action == "search_documents":
-                if intent is None or not _needs_retrieval(message, intent):
-                    intent = None
+                if intent is None:
                     planned_action = "search_documents"
                 else:
                     planned_action = intent
                 planned_search_query = plan.search_query
             elif plan.action == "clarify":
                 planned_action = intent or "clarify"
+            elif intent is not None:
+                planned_action = intent
             elif _needs_retrieval(message, intent):
                 intent = None
                 planned_action = "search_documents"

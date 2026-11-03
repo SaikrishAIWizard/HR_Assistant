@@ -44,6 +44,11 @@ The implementation uses a `src/` package layout:
   When an LLM is configured, a request planner selects document retrieval or
   one of the five leave actions; application code validates arguments,
   permissions, and write confirmations before invoking any leave tool.
+  Explicit leave actions are preserved if the planner mistakenly selects
+  document search; incomplete requests trigger clarification before a preview.
+  Leave lookup clarifications retain the original question in employee-bound
+  session state, so short replies such as “my” resolve against the active
+  balance or request lookup rather than being routed as unrelated messages.
   Deterministic HR-scope detection covers compensation and salary-band
   questions and prevents a planner refusal from misclassifying them as
   unrelated; document access controls still determine which evidence is

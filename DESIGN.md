@@ -64,9 +64,16 @@ external calls by default) and reference date, returns an action/search query
 rather than executable arguments, and never receives retrieved text.
 Application code detects known HR scopes, including compensation and salary
 bands, and overrides an erroneous planner refusal for those in-scope requests.
-It parses tool arguments, while tool code remains the permission boundary.
-Retrieval still filters by authenticated role, region, and date, so recognizing
-a salary question does not grant access to HR-restricted compensation sources.
+It also preserves explicitly detected leave actions when the planner
+misclassifies them as document searches. Incomplete leave requests trigger
+clarification before a preview can be prepared. Application code parses tool
+arguments, while tool code remains the permission boundary. Retrieval still
+filters by authenticated role, region, and date, so recognizing a salary
+question does not grant access to HR-restricted compensation sources.
+Clarification state is persisted by session and authenticated employee. It
+retains the original leave question and the pending choice or missing field,
+allowing short replies to resolve the existing lookup without weakening tool
+authorization or treating clarification replies as write confirmations.
 
 ## Personal data, prompts, and audit
 
