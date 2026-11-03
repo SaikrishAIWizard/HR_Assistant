@@ -979,6 +979,50 @@ def test_chat_clarifies_all_missing_apply_fields_at_once(tmp_path, monkeypatch) 
     assert body["pending_confirmation"] is False
 
 
+def test_chat_keeps_apply_context_across_date_clarifications(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("APP_TODAY", "2026-11-02")
+    corpus_dir, manifest_path, database_path = _write_fixture_files(tmp_path)
+    app = create_app(
+        corpus_dir=corpus_dir,
+        manifest_path=manifest_path,
+        database_path=database_path,
+    )
+
+    with TestClient(app) as client:
+        _wait_until_ready(client)
+        clarification = _chat(
+            client,
+            "I want to apply for annual leave",
+            "apply-date-follow-up",
+        )
+        past_dates = _chat(
+            client,
+            "from 2026-07-06 to 2026-07-10",
+            "apply-date-follow-up",
+        )
+        future_dates = _chat(
+            client,
+            "from 2026-11-09 to 2026-11-13",
+            "apply-date-follow-up",
+        )
+
+    assert clarification.json()["route"] == "clarify"
+    past_body = past_dates.json()
+    assert past_body["route"] == "clarify"
+    assert "already passed" in past_body["answer"]
+    future_body = future_dates.json()
+    assert future_body["route"] == "tool"
+    assert future_body["pending_confirmation"] is True
+    assert future_body["tool_calls"][0]["args"] == {
+        "leave_type": "annual",
+        "start_date": "2026-11-09",
+        "end_date": "2026-11-13",
+    }
+
+
 def test_chat_resolves_next_friday_and_yearless_ranges_and_clarifies_past_dates(
     tmp_path,
     monkeypatch,

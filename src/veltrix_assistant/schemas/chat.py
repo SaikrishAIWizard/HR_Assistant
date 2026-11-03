@@ -73,3 +73,15 @@ class PendingAction(BaseModel):
     name: Literal["apply_leave", "cancel_leave"]
     args: dict[str, object]
     summary: str = Field(min_length=1)
+
+
+class PendingClarification(BaseModel):
+    """The details already provided for a leave request awaiting clarification."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    employee_id: str = Field(min_length=1)
+    intent: Literal["apply_leave"]
+    leave_type: Literal["annual", "sick"] | None = None
+    start_date: str | None = None
+    end_date: str | None = None

@@ -26,6 +26,7 @@ from veltrix_assistant.schemas.chat import (
     ChatResponse,
     ChatToolCall,
     PendingAction,
+    PendingClarification,
 )
 from veltrix_assistant.schemas.documents import DocumentMetadata, RetrievedChunk
 from veltrix_assistant.schemas.policy import DocumentAudience
@@ -929,6 +930,23 @@ def respond_to_message(
     pii_sensitive_terms: tuple[str, ...] = (),
 ) -> ChatResponse:
     """Route one chat message and enforce the single pending-confirmation rule."""
+    stored_clarification = session_store.consume_pending_clarification(
+        session_id,
+        identity.employee_id,
+    )
+    pending_clarification: PendingClarification | None = None
+    if stored_clarification is not None:
+        try:
+            pending_clarification = PendingClarification.model_validate_json(
+                stored_clarification
+            )
+        except ValueError as exc:
+            raise ValueError("Stored chat clarification is invalid.") from exc
+        if pending_clarification.employee_id != identity.employee_id:
+            raise ValueError(
+                "Stored chat clarification belongs to a different employee."
+            )
+
     stored_pending = session_store.consume_pending(session_id, identity.employee_id)
     pending: PendingAction | None = None
     if stored_pending is not None:
@@ -992,6 +1010,26 @@ def respond_to_message(
         )
 
     intent = _tool_intent(message)
+    tool_message = message
+    if (
+        pending_clarification is not None
+        and intent is None
+        and (_date_range(message, today) is not None or _leave_type(message) is not None)
+    ):
+        intent = pending_clarification.intent
+        supplied_dates = _date_range(message, today)
+        retained_dates = (
+            f"{pending_clarification.start_date} to "
+            f"{pending_clarification.end_date}"
+            if supplied_dates is None
+            and pending_clarification.start_date is not None
+            and pending_clarification.end_date is not None
+            else ""
+        )
+        retained_leave_type = _leave_type(message) or pending_clarification.leave_type
+        tool_message = (
+            f"apply {retained_leave_type or ''} leave {retained_dates} {message}"
+        )
     projection_query = _is_future_balance_question(message)
     projection_target = (
         _projection_target_date(message)
@@ -1092,13 +1130,31 @@ def respond_to_message(
         if replacement_args is None:
             clarification, args = _clarification_for_tool(
                 intent,
-                message,
+                tool_message,
                 identity,
                 today,
             )
         else:
             clarification, args = None, replacement_args
         if clarification is not None:
+            if intent == "apply_leave":
+                date_range = _date_range(tool_message, today)
+                pending_clarification = PendingClarification(
+                    employee_id=identity.employee_id,
+                    intent="apply_leave",
+                    leave_type=_leave_type(tool_message),
+                    start_date=(
+                        date_range[0].isoformat() if date_range is not None else None
+                    ),
+                    end_date=(
+                        date_range[1].isoformat() if date_range is not None else None
+                    ),
+                )
+                session_store.store_pending_clarification(
+                    session_id,
+                    identity.employee_id,
+                    pending_clarification.model_dump_json(),
+                )
             return _response(clarification, "clarify")
         assert args is not None
 

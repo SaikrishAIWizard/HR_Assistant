@@ -44,6 +44,15 @@ class SessionBindingStore:
                     )
                     """
                 )
+                connection.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS assistant_pending_clarifications (
+                        session_id TEXT PRIMARY KEY,
+                        clarification_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
         except sqlite3.Error as exc:
             raise IdentityDirectoryError(
                 "Could not initialize persistent session ownership."
@@ -137,6 +146,74 @@ class SessionBindingStore:
         except sqlite3.Error as exc:
             raise IdentityDirectoryError(
                 "Could not store pending session action."
+            ) from exc
+
+    def consume_pending_clarification(
+        self,
+        session_id: str,
+        employee_id: str,
+    ) -> str | None:
+        """Atomically read and clear a session's pending leave clarification."""
+        try:
+            with sqlite3.connect(self._database_path, timeout=5) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                owner = connection.execute(
+                    "SELECT employee_id FROM assistant_sessions WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                if owner is None or owner[0] != employee_id:
+                    return None
+                row = connection.execute(
+                    "SELECT clarification_json FROM assistant_pending_clarifications "
+                    "WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                connection.execute(
+                    "DELETE FROM assistant_pending_clarifications WHERE session_id = ?",
+                    (session_id,),
+                )
+                return row[0] if row is not None else None
+        except sqlite3.Error as exc:
+            raise IdentityDirectoryError(
+                "Could not read pending session clarification."
+            ) from exc
+
+    def store_pending_clarification(
+        self,
+        session_id: str,
+        employee_id: str,
+        clarification_json: str,
+    ) -> None:
+        """Persist a leave clarification only for the employee who owns the session."""
+        try:
+            with sqlite3.connect(self._database_path, timeout=5) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                owner = connection.execute(
+                    "SELECT employee_id FROM assistant_sessions WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()
+                if owner is None or owner[0] != employee_id:
+                    raise IdentityDirectoryError(
+                        "Session ownership changed before clarification storage."
+                    )
+                connection.execute(
+                    """
+                    INSERT INTO assistant_pending_clarifications (
+                        session_id, clarification_json, created_at
+                    ) VALUES (?, ?, ?)
+                    ON CONFLICT(session_id) DO UPDATE SET
+                        clarification_json = excluded.clarification_json,
+                        created_at = excluded.created_at
+                    """,
+                    (
+                        session_id,
+                        clarification_json,
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+        except sqlite3.Error as exc:
+            raise IdentityDirectoryError(
+                "Could not store pending session clarification."
             ) from exc
 
 
