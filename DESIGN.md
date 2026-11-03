@@ -20,20 +20,26 @@ reciprocal rank fusion in `retrieval/hybrid.py`; this combines lexical matches
 with semantic candidates without comparing unlike score scales. BM25-only
 mode avoids Chroma and is useful when embeddings are unavailable. The default
 CPU feature-hashing embeddings need no model download, but are less semantic
-than a language embedding model. `retrieval/context.py` keeps corpus text sent
-to each answer-generation call at or below 3,000 tokens and logs that count.
+than a language embedding model. Chat uses both the original question and the
+planner's search terms. It filters BM25 candidates by query relevance before
+ranking and removes irrelevant vector candidates before final fusion, so
+unrelated matches cannot crowd exact lexical evidence out of the selected
+results. `retrieval/context.py` keeps corpus text sent to each
+answer-generation call at or below 3,000 tokens and logs that count.
 
 ## Applicability and precedence
 
 `policy/applicability.py` implements the document rules. `is_document_readable`
 checks access level and region; `is_document_applicable` also checks the
-effective date. Search filters candidates with these checks before returning
-evidence to the answer model. `select_precedence_winners` orders applicable
-evidence by authority, region specificity, then effective date, preserving
-true ties so conflicting values are not silently chosen. Superseded versions
-are excluded, and `get_upcoming_winners` allows readable future winners to be
-identified and cited separately. `conversation.py` resolves requested
-historical reference dates and assembles the current and upcoming evidence.
+effective date. Chat and search filter candidates with these checks before
+returning evidence to the answer model. Chat's relevance filter runs after
+authorization but before final hybrid ranking is truncated.
+`select_precedence_winners` orders applicable evidence by authority, region
+specificity, then effective date, preserving true ties so conflicting values
+are not silently chosen. Superseded versions are excluded, and
+`get_upcoming_winners` allows readable future winners to be identified and
+cited separately. `conversation.py` resolves requested historical reference
+dates and assembles the current and upcoming evidence.
 
 ## Access control and leave actions
 
@@ -56,8 +62,11 @@ confirmation before executing a proposed write. With an LLM configured,
 the five leave actions. The planner receives the message (PII-redacted before
 external calls by default) and reference date, returns an action/search query
 rather than executable arguments, and never receives retrieved text.
-Application code parses arguments and tool code remains the permission
-boundary.
+Application code detects known HR scopes, including compensation and salary
+bands, and overrides an erroneous planner refusal for those in-scope requests.
+It parses tool arguments, while tool code remains the permission boundary.
+Retrieval still filters by authenticated role, region, and date, so recognizing
+a salary question does not grant access to HR-restricted compensation sources.
 
 ## Personal data, prompts, and audit
 

@@ -99,6 +99,10 @@ _CANCELLATIONS = {
 _HR_SCOPE_TERMS = (
     "leave",
     "holiday",
+    "salary",
+    "compensation",
+    "pay band",
+    "pay bands",
     "policy",
     "employee",
     "manager",
@@ -114,6 +118,10 @@ _HR_SCOPE_TERMS = (
 )
 _POLICY_CUES = (
     "policy",
+    "salary",
+    "compensation",
+    "pay band",
+    "pay bands",
     "carry forward",
     "carried forward",
     "carry over",
@@ -1116,6 +1124,9 @@ def respond_to_message(
             planned_search_query = plan.search_query
         elif plan.action == "clarify":
             planned_action = intent
+        elif _needs_retrieval(message, intent):
+            intent = None
+            planned_action = "search_documents"
         else:
             intent = None
             planned_action = "refuse"
@@ -1366,7 +1377,9 @@ def respond_to_message(
     if needs_retrieval:
         audience = DocumentAudience(region=identity.region, role=identity.role)
         normalized_query = re.sub(r"[-_]", " ", message)
-        retrieval_query = planned_search_query or normalized_query
+        retrieval_query = normalized_query
+        if planned_search_query:
+            retrieval_query = f"{normalized_query} {planned_search_query}"
         if projection_query:
             retrieval_query = (
                 "annual leave accrual rate days earned per month length of "
@@ -1388,6 +1401,9 @@ def respond_to_message(
                     "before_retrieval": True,
                 },
             )
+        def is_relevant_candidate(chunk: DocumentChunk) -> bool:
+            return _has_relevant_query_term(normalized_query, chunk)
+
         raw_matches = retriever.search(
             retrieval_query,
             is_allowed=lambda metadata: is_document_applicable(
@@ -1395,7 +1411,8 @@ def respond_to_message(
                 audience,
                 reference_date,
             ),
-            limit=5,
+            limit=20,
+            candidate_filter=is_relevant_candidate,
         )
         raw_upcoming_candidates = retriever.search(
             retrieval_query,
@@ -1404,17 +1421,10 @@ def respond_to_message(
                 and metadata.effective_date > reference_date
             ),
             limit=10,
+            candidate_filter=is_relevant_candidate,
         )
-        matches = [
-            match
-            for match in raw_matches
-            if _has_relevant_query_term(normalized_query, match.chunk)
-        ]
-        upcoming_candidates = [
-            match
-            for match in raw_upcoming_candidates
-            if _has_relevant_query_term(normalized_query, match.chunk)
-        ]
+        matches = raw_matches
+        upcoming_candidates = raw_upcoming_candidates
         relevant_documents = tuple(
             dict.fromkeys(
                 match.chunk.document
@@ -1497,8 +1507,11 @@ def respond_to_message(
                 citations = retrieval_citations
             elif tool_result is None:
                 return _response(
-                    "The available documents do not cover this question. "
-                    "Please contact the HR team for guidance.",
+                    retrieval_answer.strip()
+                    or (
+                        "The available documents do not cover this question. "
+                        "Please contact the HR team for guidance."
+                    ),
                     "no_answer",
                 )
             else:

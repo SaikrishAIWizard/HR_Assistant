@@ -15,8 +15,10 @@ privacy**, and **Requirement 5: conversation routing and confirmation**.
    metadata, page number, and citation locator.
 4. Search with authorization-first hybrid retrieval: local BM25 and persistent
    Chroma vector candidates are fused with Reciprocal Rank Fusion. BM25-only
-   mode remains configurable, and filtering happens before results can reach a
-   model.
+   mode remains configurable. Chat preserves the original user terms alongside
+   planner search terms and applies relevance filtering before the final fused
+   top-k cutoff, so exact lexical matches are not displaced by unrelated
+   candidates.
 5. Build model context under the assessment's hard 3,000-token corpus-text
    ceiling using `cl100k_base`; log that count immediately before each model
    call.
@@ -42,6 +44,10 @@ The implementation uses a `src/` package layout:
   When an LLM is configured, a request planner selects document retrieval or
   one of the five leave actions; application code validates arguments,
   permissions, and write confirmations before invoking any leave tool.
+  Deterministic HR-scope detection covers compensation and salary-band
+  questions and prevents a planner refusal from misclassifying them as
+  unrelated; document access controls still determine which evidence is
+  available to the requester.
 - `src/veltrix_assistant/provenance.py` — versioned, pseudonymous request traces
   persisted in assistant-owned SQLite tables.
 - `tests/` — focused ingestion, retrieval, and token-budget tests.
@@ -123,8 +129,9 @@ flowchart LR
     BM --> RET[Retriever]
     VS --> RET
     AUTH --> RET
-    RET --> FUSE[Rank candidates; RRF fusion in hybrid mode]
-    FUSE --> APP[Relevance, precedence and upcoming-change selection]
+    RET --> REL[Query relevance before top-k truncation]
+    REL --> FUSE[Rank candidates; RRF fusion in hybrid mode]
+    FUSE --> APP[Precedence and upcoming-change selection]
     APP --> CTX[Build authorized context within token budget]
     CTX --> GEN[LLM grounded answer or offline source excerpts]
     GEN --> CV[Validate citations against selected evidence]

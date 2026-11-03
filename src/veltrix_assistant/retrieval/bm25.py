@@ -49,6 +49,7 @@ class BM25Retriever:
         is_allowed: Callable[[DocumentMetadata], bool],
         limit: int = 5,
         metadata_filter: Mapping[str, object] | None = None,
+        candidate_filter: Callable[[DocumentChunk], bool] | None = None,
     ) -> list[RetrievedChunk]:
         """Return ranked matches only from documents approved by ``is_allowed``."""
         if limit < 1:
@@ -62,6 +63,10 @@ class BM25Retriever:
             for chunk in self._chunks
             if is_allowed(chunk.document)
             and metadata_matches(chunk.document, metadata_filter)
+            and (
+                candidate_filter is None
+                or candidate_filter(chunk)
+            )
         ]
         visible_documents = tuple(
             {

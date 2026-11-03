@@ -71,6 +71,7 @@ class HybridRetriever:
         is_allowed: Callable[[DocumentMetadata], bool],
         limit: int | None = None,
         metadata_filter: Mapping[str, object] | None = None,
+        candidate_filter: Callable[[DocumentChunk], bool] | None = None,
     ) -> list[RetrievedChunk]:
         """Filter first, retrieve from both indexes, then fuse unique chunk IDs."""
         if not query.strip():
@@ -84,6 +85,10 @@ class HybridRetriever:
             for chunk in self._chunks
             if is_allowed(chunk.document)
             and metadata_matches(chunk.document, metadata_filter)
+            and (
+                candidate_filter is None
+                or candidate_filter(chunk)
+            )
         ]
         visible_documents = tuple(
             {
@@ -105,12 +110,17 @@ class HybridRetriever:
             {chunk.document.doc_id for chunk in visible_chunks}
         )
 
+        bm25_limit = max(self._bm25_top_k, requested_limit)
+        if candidate_filter is not None:
+            bm25_limit = max(bm25_limit, len(visible_chunks))
+
         bm25_started = time.perf_counter()
         bm25_results = self._bm25.search(
             query,
             is_allowed=is_allowed,
-            limit=max(self._bm25_top_k, requested_limit),
+            limit=bm25_limit,
             metadata_filter=metadata_filter,
+            candidate_filter=candidate_filter,
         )
         bm25_duration = time.perf_counter() - bm25_started
 
@@ -125,7 +135,12 @@ class HybridRetriever:
         vector_results = [
             (chunk_id, score)
             for chunk_id, score in vector_results
-            if chunk_id in allowed_chunk_ids and score >= _MIN_VECTOR_SIMILARITY
+            if chunk_id in allowed_chunk_ids
+            and score >= _MIN_VECTOR_SIMILARITY
+            and (
+                candidate_filter is None
+                or candidate_filter(self._chunk_by_id[chunk_id])
+            )
         ]
 
         fused: dict[str, float] = {}

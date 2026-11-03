@@ -278,6 +278,9 @@ class ChatWorkflow:
                 planned_search_query = plan.search_query
             elif plan.action == "clarify":
                 planned_action = intent or "clarify"
+            elif _needs_retrieval(message, intent):
+                intent = None
+                planned_action = "search_documents"
             else:
                 intent = None
                 planned_action = "refuse"
