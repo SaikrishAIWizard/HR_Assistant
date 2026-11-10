@@ -81,8 +81,10 @@ executing leave writes. Tool permissions are enforced in the application, not
 delegated to the model.
 
 Hybrid retrieval, local embeddings, PII redaction, LangGraph orchestration, and
-pseudonymous provenance are enabled by default. See [`DESIGN.md`](./DESIGN.md)
-for the architecture, security boundaries, failure modes, and scaling notes.
+pseudonymous provenance are enabled by default. See
+[`ARCHITECTURE.md`](./ARCHITECTURE.md) for the architecture diagrams and
+interview walkthrough, and [`DESIGN.md`](./DESIGN.md) for security boundaries,
+failure modes, and scaling notes.
 Run the required test suite with `make test`.
 
 ## Architecture
