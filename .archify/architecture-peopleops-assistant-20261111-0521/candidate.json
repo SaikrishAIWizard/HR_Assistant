@@ -1,0 +1,380 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Veltrix PeopleOps Assistant",
+    "output": ".archify/architecture-peopleops-assistant-20261111-0521/veltrix-peopleops-assistant.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/SaikrishAIWizard/HR_Assistant.git",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "0e1d1795060c26ff6ae56f656676d31b12d537a8"
+    }
+  },
+  "components": [
+    {
+      "id": "employee",
+      "type": "external",
+      "label": "Employee",
+      "sublabel": "question or leave request",
+      "pos": [35, 265],
+      "size": [122, 64],
+      "sources": [
+        {
+          "path": "src/veltrix_assistant/api.py",
+          "line": 332,
+          "end_line": 347
+        }
+      ]
+    },
+    {
+      "id": "fastapi",
+      "type": "backend",
+      "label": "FastAPI",
+      "sublabel": "/chat · /search",
+      "pos": [245, 265],
+      "size": [145, 72],
+      "sources": [
+        {
+          "path": "src/veltrix_assistant/api.py",
+          "line": 79,
+          "end_line": 106
+        },
+        {
+          "path": "src/veltrix_assistant/api.py",
+          "line": 214,
+          "end_line": 235
+        },
+        {
+          "path": "src/veltrix_assistant/api.py",
+          "line": 332,
+          "end_line": 352
+        }
+      ]
+    },
+    {
+      "id": "sqlite",
+      "type": "database",
+      "label": "SQLite",
+      "sublabel": "identity · leave · audit",
+      "pos": [245, 450],
+      "size": [155, 72],
+      "sources": [
+        {
+          "path": "src/veltrix_assistant/security/identity.py",
+          "line": 220,
+          "end_line": 247
+        },
+        {
+          "path": "src/veltrix_assistant/tools/leave.py",
+          "line": 628,
+          "end_line": 705
+        },
+        {
+          "path": "src/veltrix_assistant/provenance.py",
+          "line": 152,
+          "end_line": 215
+        }
+      ]
+    },
+    {
+      "id": "langgraph",
+      "type": "backend",
+      "label": "LangGraph workflow",
+      "sublabel": "guard · routing · citation checks",
+      "pos": [520, 265],
+      "size": [155, 76],
+      "sources": [
+        {
+          "path": "src/veltrix_assistant/workflow.py",
+          "line": 112,
+          "end_line": 190
+        }
+      ]
+    },
+    {
+      "id": "conversation",
+      "type": "backend",
+      "label": "Conversation handler",
+      "sublabel": "dispatch · answer · citations",
+      "pos": [800, 265],
+      "size": [165, 76],
+      "sources": [
+        {
+          "path": "src/veltrix_assistant/conversation.py",
+          "line": 833,
+          "end_line": 935
+        },
+        {
+          "path": "src/veltrix_assistant/conversation.py",
+          "line": 1175,
+          "end_line": 1220
+        },
+        {
+          "path": "src/veltrix_assistant/conversation.py",
+          "line": 1435,
+          "end_line": 1458
+        }
+      ]
+    },
+    {
+      "id": "retriever",
+      "type": "backend",
+      "label": "Authorized retrieval",
+      "sublabel": "policy · role · region · date",
+      "pos": [1010, 175],
+      "size": [160, 76],
+      "sources": [
+        {
+          "path": "src/veltrix_assistant/retrieval/hybrid.py",
+          "line": 37,
+          "end_line": 108
+        },
+        {
+          "path": "src/veltrix_assistant/conversation.py",
+          "line": 1510,
+          "end_line": 1540
+        }
+      ]
+    },
+    {
+      "id": "llm",
+      "type": "external",
+      "label": "Configured LLM",
+      "sublabel": "optional · offline fallback",
+      "pos": [1010, 350],
+      "size": [160, 72],
+      "sources": [
+        {
+          "path": "src/veltrix_assistant/api.py",
+          "line": 95,
+          "end_line": 105
+        },
+        {
+          "path": "src/veltrix_assistant/conversation.py",
+          "line": 848,
+          "end_line": 935
+        }
+      ]
+    },
+    {
+      "id": "leave_tools",
+      "type": "backend",
+      "label": "Leave tools",
+      "sublabel": "scope · preview · confirmed write",
+      "pos": [800, 450],
+      "size": [165, 76],
+      "sources": [
+        {
+          "path": "src/veltrix_assistant/tools/leave.py",
+          "line": 222,
+          "end_line": 280
+        },
+        {
+          "path": "src/veltrix_assistant/tools/leave.py",
+          "line": 568,
+          "end_line": 705
+        },
+        {
+          "path": "src/veltrix_assistant/conversation.py",
+          "line": 1435,
+          "end_line": 1458
+        }
+      ]
+    },
+    {
+      "id": "corpus",
+      "type": "external",
+      "label": "HR corpus",
+      "sublabel": "manifest + source documents",
+      "pos": [35, 75],
+      "size": [145, 64],
+      "sources": [
+        {
+          "path": "src/veltrix_assistant/ingestion/pipeline.py",
+          "line": 20,
+          "end_line": 43
+        }
+      ]
+    },
+    {
+      "id": "ingestion",
+      "type": "backend",
+      "label": "Ingestion pipeline",
+      "sublabel": "extract · OCR · chunk",
+      "pos": [260, 75],
+      "size": [160, 72],
+      "sources": [
+        {
+          "path": "src/veltrix_assistant/ingestion/pipeline.py",
+          "line": 20,
+          "end_line": 43
+        },
+        {
+          "path": "src/veltrix_assistant/ingestion/loaders.py",
+          "line": 35,
+          "end_line": 75
+        },
+        {
+          "path": "src/veltrix_assistant/ingestion/chunking.py",
+          "line": 20,
+          "end_line": 55
+        }
+      ]
+    },
+    {
+      "id": "bm25",
+      "type": "backend",
+      "label": "BM25 index",
+      "sublabel": "lexical search",
+      "pos": [520, 150],
+      "size": [140, 66],
+      "sources": [
+        {
+          "path": "src/veltrix_assistant/api.py",
+          "line": 136,
+          "end_line": 152
+        },
+        {
+          "path": "src/veltrix_assistant/retrieval/hybrid.py",
+          "line": 37,
+          "end_line": 55
+        }
+      ]
+    },
+    {
+      "id": "chroma",
+      "type": "database",
+      "label": "Persistent Chroma",
+      "sublabel": "local vector index",
+      "pos": [765, 75],
+      "size": [165, 72],
+      "sources": [
+        {
+          "path": "src/veltrix_assistant/retrieval/vector_store.py",
+          "line": 228,
+          "end_line": 268
+        },
+        {
+          "path": "src/veltrix_assistant/retrieval/vector_store.py",
+          "line": 329,
+          "end_line": 372
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "employee",
+      "to": "fastapi",
+      "label": "POST /chat",
+      "variant": "emphasis"
+    },
+    {
+      "from": "fastapi",
+      "to": "langgraph",
+      "label": "authenticated request"
+    },
+    {
+      "from": "fastapi",
+      "to": "employee",
+      "label": "HTTP response"
+    },
+    {
+      "from": "fastapi",
+      "to": "sqlite",
+      "label": "identity · session · trace",
+      "variant": "security"
+    },
+    {
+      "from": "langgraph",
+      "to": "conversation",
+      "label": "route to handler",
+      "variant": "emphasis"
+    },
+    {
+      "from": "langgraph",
+      "to": "fastapi",
+      "label": "validated ChatResponse",
+      "variant": "emphasis"
+    },
+    {
+      "from": "conversation",
+      "to": "retriever",
+      "label": "role/date-filtered query"
+    },
+    {
+      "from": "retriever",
+      "to": "conversation",
+      "label": "authorized evidence"
+    },
+    {
+      "from": "conversation",
+      "to": "llm",
+      "label": "redacted question + evidence",
+      "variant": "emphasis"
+    },
+    {
+      "from": "llm",
+      "to": "conversation",
+      "label": "grounded answer"
+    },
+    {
+      "from": "conversation",
+      "to": "leave_tools",
+      "label": "leave action"
+    },
+    {
+      "from": "leave_tools",
+      "to": "sqlite",
+      "label": "recheck · atomic write",
+      "variant": "security"
+    },
+    {
+      "from": "corpus",
+      "to": "ingestion",
+      "label": "manifest files"
+    },
+    {
+      "from": "ingestion",
+      "to": "bm25",
+      "label": "token chunks"
+    },
+    {
+      "from": "ingestion",
+      "to": "chroma",
+      "label": "sync chunks"
+    },
+    {
+      "from": "bm25",
+      "to": "retriever",
+      "label": "lexical candidates"
+    },
+    {
+      "from": "chroma",
+      "to": "retriever",
+      "label": "vector candidates"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "How to explain it",
+      "items": [
+        "FastAPI verifies employee identity before dispatching chat.",
+        "LangGraph routes; retrieval and leave-tool code execute the work.",
+        "Policy answers use authorized evidence; leave writes require confirmation."
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Trust boundaries",
+      "items": [
+        "Role, region, and date restrictions apply before evidence reaches the answer step.",
+        "PII redaction is enabled by default for external model calls.",
+        "The LLM proposes or phrases; application code enforces permissions and writes."
+      ]
+    }
+  ]
+}

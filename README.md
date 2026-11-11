@@ -89,6 +89,8 @@ Run the required test suite with `make test`.
 
 ## Architecture
 
+[Open the interactive Archify architecture diagram](./.archify/architecture-peopleops-assistant-20261111-0521/veltrix-peopleops-assistant.html).
+
 ### Request orchestration (control flow)
 
 ```mermaid

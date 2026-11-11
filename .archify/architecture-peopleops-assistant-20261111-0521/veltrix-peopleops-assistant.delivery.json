@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "8f4d4786-0367-4240-a126-c68dbe23fe9f",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "C:\\Users\\vijay\\OneDrive\\Desktop\\pythonProject\\2026\\veltrix_assessment\\veltrix_assessment\\.archify\\architecture-peopleops-assistant-20261111-0521\\candidate.json",
+  "output": "C:\\Users\\vijay\\OneDrive\\Desktop\\pythonProject\\2026\\veltrix_assessment\\veltrix_assessment\\.archify\\architecture-peopleops-assistant-20261111-0521\\veltrix-peopleops-assistant.html",
+  "specification": {
+    "sha256": "9787ddf1dc2a0aa00df8ac0f1679fe72fe942a9706dfa8d215ad3ea927e8d1fa",
+    "bytes": 9410
+  },
+  "artifact": {
+    "sha256": "43bc8efe27434510d6afcd38c6827fffc0b5a27e5c19ecb41f761cbcbce13177",
+    "bytes": 862857
+  }
+}
