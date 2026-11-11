@@ -1,0 +1,245 @@
+{
+  "note": "Thirty seed evaluation questions drafted against the bundled corpus and manifest. Review relevant_doc_ids before using scores to justify a production setting; this is not an independently judged test set.",
+  "queries": [
+    {
+      "id": "india-annual-leave-carry-forward",
+      "question": "How many annual leave days can employees in India carry forward?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["ADD-LEAVE-IN", "POL-LEAVE-GLOBAL-V2"]
+    },
+    {
+      "id": "india-annual-leave-balance-cap",
+      "question": "What is the maximum annual leave balance in India?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["ADD-LEAVE-IN"]
+    },
+    {
+      "id": "india-public-holidays",
+      "question": "Which public holidays are observed in Bengaluru in 2026?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["CAL-HOL-IN-2026"]
+    },
+    {
+      "id": "remote-work-days",
+      "question": "How many days per week may employees work remotely?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["POL-REMOTE-WORK"]
+    },
+    {
+      "id": "expense-claim-receipts",
+      "question": "When must travel expense claims be submitted and when are receipts required?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["POL-TRAVEL-EXPENSE"]
+    },
+    {
+      "id": "password-length-mfa",
+      "question": "What is the minimum password length and is multi-factor authentication required?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["POL-IT-SECURITY"]
+    },
+    {
+      "id": "india-l4-salary-band",
+      "question": "What is the annual salary band for L4 in India?",
+      "role": "hr",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["HR-COMP-BANDS-2026"]
+    },
+    {
+      "id": "annual-sick-days",
+      "question": "How many paid sick days do employees get each year?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["FAQ-LEAVE"]
+    },
+    {
+      "id": "sick-day-credit-date",
+      "question": "When are paid sick days credited to an employee?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["FAQ-LEAVE"]
+    },
+    {
+      "id": "leave-request-steps",
+      "question": "How do I submit a new leave request in the HR system?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["WIKI-LEAVE-HOWTO"]
+    },
+    {
+      "id": "manager-leave-response-time",
+      "question": "How quickly should managers respond to every leave request?",
+      "role": "manager",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["HB-MANAGER"]
+    },
+    {
+      "id": "manager-annual-leave-refusal",
+      "question": "When may managers refuse an annual leave request?",
+      "role": "manager",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["HB-MANAGER"]
+    },
+    {
+      "id": "us-annual-leave-entitlement",
+      "question": "How many annual leave days are provided to employees in the United States?",
+      "role": "employee",
+      "region": "US",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["ADD-LEAVE-US"]
+    },
+    {
+      "id": "germany-annual-leave-entitlement",
+      "question": "How many annual leave days are provided to employees in Germany?",
+      "role": "employee",
+      "region": "DE",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["ADD-LEAVE-DE"]
+    },
+    {
+      "id": "austin-public-holidays",
+      "question": "Which paid public holidays does the Austin office observe in 2026?",
+      "role": "employee",
+      "region": "US",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["CAL-HOL-US-2026"]
+    },
+    {
+      "id": "berlin-public-holidays",
+      "question": "Which public holidays close the Berlin office in 2026?",
+      "role": "employee",
+      "region": "DE",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["CAL-HOL-DE-2026"]
+    },
+    {
+      "id": "bengaluru-hybrid-update",
+      "question": "What changed in the hybrid work arrangements for the Bengaluru office?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["MEMO-HYBRID-2026"]
+    },
+    {
+      "id": "corporate-card-eligibility",
+      "question": "Which employees are eligible for a corporate card?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["HB-FINANCE"]
+    },
+    {
+      "id": "purchase-request-process",
+      "question": "How should employees submit a purchase request?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["HB-FINANCE"]
+    },
+    {
+      "id": "travel-expense-deadline",
+      "question": "When must employees submit travel expense claims?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["POL-TRAVEL-EXPENSE"]
+    },
+    {
+      "id": "travel-expense-receipts",
+      "question": "When are receipts required for travel expense claims?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["POL-TRAVEL-EXPENSE"]
+    },
+    {
+      "id": "code-of-conduct-respect",
+      "question": "What does the code of conduct expect about respect at work?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["POL-CONDUCT"]
+    },
+    {
+      "id": "learning-development-support",
+      "question": "What learning and development support can employees receive?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["POL-LEARNING"]
+    },
+    {
+      "id": "us-health-benefits",
+      "question": "What health benefits are available to employees in the United States?",
+      "role": "employee",
+      "region": "US",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["POL-BENEFITS-US"]
+    },
+    {
+      "id": "india-health-benefits",
+      "question": "What health benefits are available to employees in India?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["POL-BENEFITS-IN"]
+    },
+    {
+      "id": "germany-working-time",
+      "question": "What is the standard working time for employees in Germany?",
+      "role": "employee",
+      "region": "DE",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["POL-WORKTIME-DE"]
+    },
+    {
+      "id": "probation-duration",
+      "question": "How long is the employee probation period?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["POL-PROBATION-NOTICE"]
+    },
+    {
+      "id": "probation-notice-period",
+      "question": "What notice period applies during probation?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["POL-PROBATION-NOTICE"]
+    },
+    {
+      "id": "public-holiday-compensatory-time",
+      "question": "What compensatory time off applies when employees work on a public holiday?",
+      "role": "employee",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["POL-HOLIDAY-WORK"]
+    },
+    {
+      "id": "pip-use-criteria",
+      "question": "When should HR use a performance improvement plan?",
+      "role": "hr",
+      "region": "IN",
+      "reference_date": "2026-11-11",
+      "relevant_doc_ids": ["HR-PIP-GUIDE"]
+    }
+  ]
+}

@@ -87,6 +87,32 @@ interview walkthrough, and [`DESIGN.md`](./DESIGN.md) for security boundaries,
 failure modes, and scaling notes.
 Run the required test suite with `make test`.
 
+## Benchmarking chunk sizes and strategies
+
+Compare the production sentence-greedy 20%-overlap splitter with whitespace,
+recursive-separator, sentence-greedy, sentence-greedy with 10% overlap,
+sentence-greedy with 20% overlap, and token-window alternatives. The benchmark
+uses the bundled corpus and can be rerun with:
+
+```powershell
+uv run python scripts/benchmark_chunking.py --corpus-dir .\corpus --manifest-path .\manifest.json --queries .\benchmarks\chunking_queries.json --output .\benchmarks\chunking_benchmark.json --chart-output .\benchmarks\chunking_strategies.svg --chart-size 500 --size-chart-output .\benchmarks\chunking_sizes.svg
+```
+
+By default this compares 250, 500, 750, and 1,000 token limits. It uses the
+production `HybridRetriever`, Chroma, the configured local hashing embedding
+provider (384 dimensions), and BM25-only results as a baseline. The report
+includes chunk counts and token-length statistics, hybrid/BM25 query latency,
+document-level Recall@20, and MRR. `--chart-output` compares strategies at
+the selected `--chart-size`; `--size-chart-output` compares hybrid and BM25
+for the production splitter across token limits. Each Chroma index is
+created in a temporary directory, so the app's persistent vector database is
+not modified. The query set contains 30 seed questions with relevance labels
+drafted against the bundled documents. Role/region/date eligibility and the
+production chat keyword-relevance filter are applied. Review
+`benchmarks/chunking_queries.json` before treating the quality scores as
+ground truth; this offline evaluation uses the local hashing embedder, not
+every possible production embedding configuration.
+
 ## Architecture
 
 [Open the interactive Archify architecture diagram](./.archify/architecture-peopleops-assistant-20261111-0521/veltrix-peopleops-assistant.html).

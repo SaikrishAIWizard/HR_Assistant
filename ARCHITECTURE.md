@@ -99,6 +99,78 @@ the rules and updates the leave request and balance in one SQLite transaction.
   the corpus, SQLite database, and persistent vector index. The LLM provider
   is configurable; offline extractive responses are supported.
 
+## Chunking benchmark (interview demo)
+
+Production chunks each extracted section with a 500 `cl100k_base` token maximum
+using greedy sentence packing with 20% token overlap. This retains neighboring
+context while keeping chunks within the configured maximum. The offline
+benchmark separately compared token/whitespace, recursive separators,
+sentence-greedy with no overlap, 10% and 20% overlap, and fixed token windows
+at 250, 500, 750, and 1,000-token limits. It used the 30-document corpus and
+30 provisional labeled questions with production Chroma + local hashing
+embeddings, BM25, RRF, and role/region/date and query-keyword filters. BM25-only
+results are included as a baseline.
+
+![Chunking strategy benchmark chart at 500-token chunks using hybrid retrieval](./benchmarks/chunking_strategies.svg)
+
+At 500 tokens, sentence-greedy with 20% overlap had the highest hybrid MRR of
+the tested strategies, with Recall@20 tied at 1.0000. The overlap variants
+also demonstrate the trade-off: at 500, 10% produced 162 chunks and MRR
+0.8975; 20% produced 163 chunks and MRR 0.9028. Greedy sentence packing with
+no overlap had MRR 0.8975.
+
+| Strategy | Chunks @500 | Hybrid Recall@20 | Hybrid MRR |
+|---|---:|---:|---:|
+| Token/whitespace | 161 | 1.0000 | 0.8808 |
+| Recursive separators | 161 | 1.0000 | 0.8808 |
+| Sentence greedy, no overlap | 161 | 1.0000 | 0.8975 |
+| Sentence greedy, 10% overlap | 162 | 1.0000 | 0.8975 |
+| **Sentence greedy, 20% overlap (selected)** | **163** | **1.0000** | **0.9028** |
+| Fixed token windows, 10% overlap | 161 | 1.0000 | 0.8808 |
+
+### Selecting the token limit
+
+![Production chunker token-limit comparison using hybrid retrieval and a BM25 baseline](./benchmarks/chunking_sizes.svg)
+
+| Token limit | Corpus chunks | Hybrid Recall@20 | Hybrid MRR | BM25 Recall@20 | BM25 MRR | Largest chunk |
+|---:|---:|---:|---:|---:|---:|---:|
+| 250 | 175 | 1.0000 | 0.8861 | 1.0000 | 0.8270 | 249 |
+| 500 | 163 | 1.0000 | 0.9028 | 1.0000 | 0.8704 | 404 |
+| 750 | 161 | 1.0000 | 0.8975 | 1.0000 | 0.8704 | 458 |
+| 1,000 | 161 | 1.0000 | 0.8975 | 1.0000 | 0.8704 | 458 |
+
+This size sweep holds the selected sentence-greedy 20%-overlap strategy
+constant and uses the local 384-dimensional hashing embedder, Chroma cosine
+search, BM25, and RRF (`rrf_k=60`), with role/region/date and keyword filters.
+Both methods were evaluated at the app's top-20 chat limit. All limits
+retrieved the labeled documents within top-20. The 500-token limit had the
+highest hybrid MRR in this sweep. It reduced the corpus from 175 chunks at 250
+tokens to 163; increasing to 750/1,000 saved only two additional chunks and
+lowered MRR slightly. On this corpus, 500 is a reasonable quality/size
+trade-off—not a universal optimum.
+
+Across the 30 queries at 500 tokens, the selected strategy's returned hybrid
+top-20 lists contained 485 chunks ranked by both methods, 101 BM25-only chunks,
+and no vector-only chunks after the relevance and similarity filters. Hybrid
+changed several ranks and improved aggregate MRR over BM25 alone. Results are
+specific to local hashing embeddings and are not evidence for other embedding
+providers or generated answer quality. The query labels are provisional, so
+sentence-greedy 20% overlap is the best **measured candidate** in this run,
+not a statistically conclusive winner.
+
+**Interview explanation:** “We use a 500-token maximum as a practical bound,
+not because it is a universal optimum. We compared different chunk sizes and
+sentence-overlap settings using 30 HR questions with our local Chroma +
+BM25/RRF hybrid retriever. Sentence-greedy chunking with 20% overlap gave the
+best hybrid MRR at the configured 500-token limit while keeping Recall@20
+perfect, so I selected it. The labels are provisional, so I would still review
+them and validate on production-like queries before claiming it is universally
+best.”
+
+Regenerate the report and SVG with the command in
+[README.md](./README.md); the JSON metrics are in
+[chunking_benchmark.json](./benchmarks/chunking_benchmark.json).
+
 ## Trust and audit boundaries
 
 - Employee identity comes from the employee database, not claims in the chat

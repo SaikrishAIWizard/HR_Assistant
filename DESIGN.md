@@ -3,9 +3,20 @@
 ## Ingestion, chunking, and retrieval
 
 `ingestion/pipeline.py` validates each manifest entry, loads its source, and
-creates 500-token `cl100k_base` chunks in `ingestion/chunking.py`. Chunks retain
-document metadata, page number, heading/section locator, and a stable content-
-derived ID. This keeps citations traceable and permits index synchronization.
+creates chunks in `ingestion/chunking.py` with a 500-token maximum using
+sentence-greedy packing and 20% token overlap. Chunks retain document metadata,
+page number, heading/section locator, and a stable content-derived ID. This
+keeps citations traceable and permits index synchronization. The 500-token
+value is a maximum, not a measured optimum. The offline
+`scripts/benchmark_chunking.py` compares chunk sizes, token/whitespace,
+recursive-separator, sentence-greedy, sentence-greedy with 10%/20% overlap,
+and fixed token-window strategies. It uses the production `HybridRetriever`
+(local hashing embeddings + Chroma, BM25, and RRF), alongside a BM25-only
+baseline and 30 provisional query labels. Review those labels before using the
+scores as evidence; the evaluation does not validate other embedding
+providers or answer quality. It writes SVG charts for the strategy and
+token-limit comparisons using temporary indexes, leaving the persistent app
+index untouched.
 
 `ingestion/loaders.py` extracts PDF text and tables with pdfplumber, serializing
 table rows into searchable text; it also preserves DOCX tables and reads HTML

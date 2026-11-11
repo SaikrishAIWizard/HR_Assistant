@@ -250,6 +250,10 @@ class ChromaVectorStore:
         self._pii_redaction_mode: Literal["redact", "mask"] = pii_redaction_mode
         self._pii_sensitive_terms = pii_sensitive_terms
 
+    def close(self) -> None:
+        """Close the Chroma client and release its persistent database handles."""
+        self._client.close()
+
     def _safe_embedding_text(self, text: str) -> str:
         if not self._pii_redaction_enabled:
             return text

@@ -1,0 +1,68 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1050" height="560" viewBox="0 0 1050 560">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="525.0" y="35" text-anchor="middle" font-family="Arial,sans-serif" font-size="21" font-weight="700" fill="#111827">Production sentence-greedy 20% overlap: token size comparison</text>
+<text x="185.0" y="80" text-anchor="middle" font-family="Arial,sans-serif" font-size="16" font-weight="700" fill="#111827">Mean Recall@20</text>
+<line x1="25" y1="410" x2="345" y2="410" stroke="#9ca3af"/>
+<rect x="43.0" y="100.0" width="22" height="310.0" fill="#2563eb"/>
+<text x="54.0" y="93.0" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">1.0000</text>
+<rect x="65.0" y="100.0" width="22" height="310.0" fill="#9ca3af"/>
+<text x="76.0" y="93.0" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">1.0000</text>
+<text x="65.0" y="432" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" fill="#374151">250</text>
+<rect x="123.0" y="100.0" width="22" height="310.0" fill="#2563eb"/>
+<text x="134.0" y="93.0" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">1.0000</text>
+<rect x="145.0" y="100.0" width="22" height="310.0" fill="#9ca3af"/>
+<text x="156.0" y="93.0" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">1.0000</text>
+<text x="145.0" y="432" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" fill="#374151">500</text>
+<rect x="203.0" y="100.0" width="22" height="310.0" fill="#2563eb"/>
+<text x="214.0" y="93.0" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">1.0000</text>
+<rect x="225.0" y="100.0" width="22" height="310.0" fill="#9ca3af"/>
+<text x="236.0" y="93.0" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">1.0000</text>
+<text x="225.0" y="432" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" fill="#374151">750</text>
+<rect x="283.0" y="100.0" width="22" height="310.0" fill="#2563eb"/>
+<text x="294.0" y="93.0" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">1.0000</text>
+<rect x="305.0" y="100.0" width="22" height="310.0" fill="#9ca3af"/>
+<text x="316.0" y="93.0" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">1.0000</text>
+<text x="305.0" y="432" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" fill="#374151">1000</text>
+<text x="530.0" y="80" text-anchor="middle" font-family="Arial,sans-serif" font-size="16" font-weight="700" fill="#111827">MRR</text>
+<line x1="370" y1="410" x2="690" y2="410" stroke="#9ca3af"/>
+<rect x="388.0" y="135.3" width="22" height="274.7" fill="#2563eb"/>
+<text x="399.0" y="128.3" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">0.8861</text>
+<rect x="410.0" y="153.6" width="22" height="256.4" fill="#9ca3af"/>
+<text x="421.0" y="146.6" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">0.8270</text>
+<text x="410.0" y="432" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" fill="#374151">250</text>
+<rect x="468.0" y="130.1" width="22" height="279.9" fill="#2563eb"/>
+<text x="479.0" y="123.1" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">0.9028</text>
+<rect x="490.0" y="140.2" width="22" height="269.8" fill="#9ca3af"/>
+<text x="501.0" y="133.2" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">0.8704</text>
+<text x="490.0" y="432" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" fill="#374151">500</text>
+<rect x="548.0" y="131.8" width="22" height="278.2" fill="#2563eb"/>
+<text x="559.0" y="124.8" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">0.8975</text>
+<rect x="570.0" y="140.2" width="22" height="269.8" fill="#9ca3af"/>
+<text x="581.0" y="133.2" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">0.8704</text>
+<text x="570.0" y="432" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" fill="#374151">750</text>
+<rect x="628.0" y="131.8" width="22" height="278.2" fill="#2563eb"/>
+<text x="639.0" y="124.8" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">0.8975</text>
+<rect x="650.0" y="140.2" width="22" height="269.8" fill="#9ca3af"/>
+<text x="661.0" y="133.2" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">0.8704</text>
+<text x="650.0" y="432" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" fill="#374151">1000</text>
+<text x="875.0" y="80" text-anchor="middle" font-family="Arial,sans-serif" font-size="16" font-weight="700" fill="#111827">Total corpus chunks</text>
+<line x1="715" y1="410" x2="1035" y2="410" stroke="#9ca3af"/>
+<rect x="744.0" y="100.0" width="22" height="310.0" fill="#2563eb"/>
+<text x="755.0" y="93.0" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">175</text>
+<text x="755.0" y="432" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" fill="#374151">250</text>
+<rect x="824.0" y="121.3" width="22" height="288.7" fill="#16a34a"/>
+<text x="835.0" y="114.3" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">163</text>
+<text x="835.0" y="432" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" fill="#374151">500</text>
+<rect x="904.0" y="124.8" width="22" height="285.2" fill="#d97706"/>
+<text x="915.0" y="117.8" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">161</text>
+<text x="915.0" y="432" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" fill="#374151">750</text>
+<rect x="984.0" y="124.8" width="22" height="285.2" fill="#7c3aed"/>
+<text x="995.0" y="117.8" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" fill="#111827">161</text>
+<text x="995.0" y="432" text-anchor="middle" font-family="Arial,sans-serif" font-size="11" fill="#374151">1000</text>
+<rect x="390" y="454" width="12" height="12" fill="#2563eb"/>
+<text x="408" y="465" font-family="Arial,sans-serif" font-size="11" fill="#374151">Hybrid (Chroma + BM25/RRF)</text>
+<rect x="610" y="454" width="12" height="12" fill="#9ca3af"/>
+<text x="628" y="465" font-family="Arial,sans-serif" font-size="11" fill="#374151">BM25 baseline</text>
+<text x="525.0" y="495" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" fill="#4b5563">Fixed strategy: sentence_greedy_overlap_20pct · 30 provisional queries</text>
+<text x="525.0" y="520" text-anchor="middle" font-family="Arial,sans-serif" font-size="12" fill="#4b5563">Recall/MRR are query-set quality measures; chunk count is corpus-wide. Higher limit is not automatically better.</text>
+</svg>

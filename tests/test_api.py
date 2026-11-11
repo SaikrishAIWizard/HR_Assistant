@@ -715,26 +715,28 @@ def test_chat_retrieves_all_salary_levels_in_hybrid_mode(
         evidence_doc_ids_by_request.append(
             {item.citation.doc_id for item in evidence}
         )
-        compensation = next(
-            (
-                item for item in evidence
-                if item.citation.doc_id == "HR-COMP-BANDS-2026"
-            ),
-            None,
-        )
-        if compensation is None:
+        compensation_blocks = [
+            item
+            for item in evidence
+            if item.citation.doc_id == "HR-COMP-BANDS-2026"
+        ]
+        if not compensation_blocks:
             return GeneratedAnswer(
                 status="no_answer",
                 answer="The available documents do not cover this question.",
                 citations=[],
             )
         grade = current_query[0].split(" for an ")[1].split(" ")[0]
-        if grade not in compensation.text:
+        compensation = next(
+            (item for item in compensation_blocks if grade in item.text),
+            None,
+        )
+        if compensation is None:
             return GeneratedAnswer(
                 status="no_answer",
                 answer=(
                     "The compensation table lists L1-L7, but does not include "
-                    f"{grade}. Please check with HR."
+                    f"{grade} in the retrieved evidence. Please check with HR."
                 ),
                 citations=[],
             )
@@ -769,7 +771,7 @@ def test_chat_retrieves_all_salary_levels_in_hybrid_mode(
             )
             body = response.json()
             assert response.status_code == 200
-            assert body["route"] == "rag"
+            assert body["route"] == "rag", f"{grade}: {body}"
             assert f"India {grade} annual base salary band" in body["answer"]
             assert body["citations"][0]["doc_id"] == "HR-COMP-BANDS-2026"
 
